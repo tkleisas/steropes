@@ -1,0 +1,27 @@
+# Example terminal profile: a generic countertop POS terminal.
+#
+# All geometry is in deck millimetres (origin at the deck's lower-left
+# corner, +X right, +Y up). The screen polygon lists corners in the order
+# top-left, top-right, bottom-right, bottom-left as seen in the deck image
+# convention (pixel_y growing with deck +Y).
+name: countertop_pos_v1
+
+body:
+  center_mm: [200.0, 120.0]      # body centre on the deck
+  footprint_mm: [180.0, 130.0]   # width x depth
+
+screen:
+  # 96x72 mm (4:3, matching the canonical canvas aspect so glyphs rectify
+  # without anisotropic stretch)
+  polygon_mm:
+    - [152.0, 156.0]             # top-left
+    - [248.0, 156.0]             # top-right
+    - [248.0, 84.0]              # bottom-right
+    - [152.0, 84.0]              # bottom-left
+  canonical_px: [320, 240]       # rectified screen canvas (w x h)
+
+keypad:
+  cols: 3
+  rows: 4
+
+pin: "5820"                      # the DUT's correct PIN

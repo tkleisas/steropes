@@ -1,0 +1,16 @@
+# OCR of the rendered scrambled keypad, checked against ground truth.
+name: keypad_ocr
+profile: ../profiles/countertop_pos_v1.yaml
+seed: 42
+steps:
+  - action: show_screen
+    screen: keypad
+  - action: render
+    save: frame_keypad.png
+  - action: decode_keypad
+    save: screen_rectified.png
+  - action: expect_keypad_matches_ground_truth
+  - action: plan_taps
+    pin: "1234"
+  - action: expect_tap_count
+    value: 4

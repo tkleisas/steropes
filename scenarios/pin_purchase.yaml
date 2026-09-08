@@ -1,0 +1,28 @@
+# Full PIN-purchase loop at M1 fidelity: idle -> keypad -> OCR -> tap plan
+# -> enter PIN -> result screen. Taps are fed to the DUT model directly
+# (physics contact is M3).
+name: pin_purchase
+profile: ../profiles/countertop_pos_v1.yaml
+seed: 42
+steps:
+  - action: render
+    save: 01_idle.png
+  - action: expect_screen_text
+    value: READY
+  - action: show_screen
+    screen: keypad
+  - action: render
+    save: 02_keypad.png
+  - action: decode_keypad
+    save: 03_rectified.png
+  - action: expect_keypad_matches_ground_truth
+  - action: plan_taps              # PIN defaults to the profile's PIN
+  - action: expect_tap_count
+    value: 4
+  - action: enter_pin
+  - action: expect_dut_state
+    value: approved
+  - action: render
+    save: 04_result.png
+  - action: expect_screen_text
+    value: APPROVED

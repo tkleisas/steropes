@@ -1,0 +1,22 @@
+# Declined variant of the PIN-purchase loop: a wrong PIN is decoded, planned,
+# and entered; the result screen must read DECLINED.
+name: pin_declined
+profile: ../profiles/countertop_pos_v1.yaml
+seed: 42
+steps:
+  - action: show_screen
+    screen: keypad
+  - action: render
+    save: 01_keypad.png
+  - action: decode_keypad
+    save: 02_rectified.png
+  - action: expect_keypad_matches_ground_truth
+  - action: plan_taps
+    pin: "0000"                    # deliberately wrong PIN
+  - action: enter_pin
+  - action: expect_dut_state
+    value: declined
+  - action: render
+    save: 03_result.png
+  - action: expect_screen_text
+    value: DECLINED

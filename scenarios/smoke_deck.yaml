@@ -1,0 +1,12 @@
+# Smoke test: render the deck and check fiducial registration.
+name: smoke_deck
+profile: ../profiles/countertop_pos_v1.yaml
+seed: 7
+steps:
+  - action: render
+    save: frame_overhead.png
+  - action: expect_markers
+    count: 4
+  - action: calibrate
+  - action: expect_homography_rms_below
+    value: 0.5
