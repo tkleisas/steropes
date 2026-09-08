@@ -1,8 +1,11 @@
-"""MuJoCo scene: deck, fiducial markers, DUT body, dynamic screen texture.
+"""MuJoCo scene: deck, fiducial markers, DUT body, screen texture, gantry.
 
-Builds a programmatic MJCF for a static top-down scene — deck plane, four
+Builds a programmatic MJCF for the top-down scene — deck plane, four
 flat ArUco marker tiles at their deck coordinates, a flush terminal body with
-a textured screen quad — and renders it from an overhead pinhole camera.
+a textured screen quad plus a raised back strip (collision hazard), and the
+kinematic M2 toolhead with its own downward camera (see
+:mod:`steropes.gantry`). Renders from an overhead pinhole camera or from the
+toolhead camera.
 
 Frame convention: the physical straight-down camera shows deck +Y as
 image-up; rendered frames are flipped vertically on read-out so pixel_y grows
@@ -26,6 +29,7 @@ import numpy as np
 import yaml
 
 from . import deck as deck_const
+from . import gantry
 
 # Flat quad mesh (2x2 m, UV-mapped) used for markers and the screen; MuJoCo's
 # built-in box texture mapping does not span a face, so UVs are explicit.
@@ -99,7 +103,12 @@ def marker_tile(marker_id: int) -> np.ndarray:
 # --- scene -------------------------------------------------------------------------
 
 class DeckScene:
-    """Static deck scene with an overhead camera and a live screen texture."""
+    """Deck scene with overhead and toolhead cameras and a live screen texture.
+
+    Carries the kinematic M2 gantry: the toolhead moves in deck XY via two
+    slide joints (:meth:`move_toolhead`), and contacts between the toolhead
+    geoms and the scene are recorded on every move (:attr:`collision_pairs`).
+    """
 
     def __init__(self, profile: TerminalProfile,
                  screen_shape: tuple[int, int],
@@ -127,7 +136,15 @@ class DeckScene:
 
         self._renderer = mujoco.Renderer(
             self.model, height=camera.height_px, width=camera.width_px)
+        self._tool_renderer: mujoco.Renderer | None = None  # lazy, see render_toolcam
         self._upload_textures()
+
+        # Kinematic gantry state (M2): slide-joint qpos addresses + contact log.
+        self._qx = self.model.jnt_qposadr[
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "tool_x")]
+        self._qy = self.model.jnt_qposadr[
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "tool_y")]
+        self._move_contacts: list[tuple[str, str]] = []
 
     # -- MJCF -----------------------------------------------------------------
 
@@ -151,6 +168,15 @@ class DeckScene:
         bcx, bcy = self.profile.body_center_mm
         bhx, bhy = (self.profile.body_footprint_mm[0] / 2,
                     self.profile.body_footprint_mm[1] / 2)
+
+        # Collision hazard (M2): the terminal's raised back strip (printer
+        # hump). The flat body geom above is visual-only 1 mm; the hump
+        # reaches the toolhead/finger envelope, so a scripted XY path can
+        # genuinely intercept the terminal while cruise travel over the flat
+        # region stays clear. Full footprint width, 25 mm deep, +Y edge.
+        riser_h = gantry.TERMINAL_RISER_HEIGHT_MM
+        riser_hy = 12.5
+        riser_cy = bcy + bhy - riser_hy
 
         deck_w, deck_d = deck_const.DECK_WIDTH_MM, deck_const.DECK_DEPTH_MM
         tile_m = deck_const.MARKER_TILE_MM / 2000.0
@@ -193,7 +219,12 @@ class DeckScene:
     <geom name="screen" type="mesh" mesh="screen_quad"
           pos="{scx / 1000:.4f} {scy / 1000:.4f} {scz / 1000:.5f}"
           material="screen" contype="0" conaffinity="0"/>
+    <geom name="terminal_riser" type="box"
+          size="{bhx / 1000:.4f} {riser_hy / 1000:.4f} {riser_h / 2000:.4f}"
+          pos="{bcx / 1000:.4f} {riser_cy / 1000:.4f} {riser_h / 2000:.4f}"
+          rgba="0.2 0.2 0.24 1"/>
 {marker_geoms}
+{gantry.toolhead_xml()}
     <camera name="overhead"
             pos="{deck_w / 2000:.4f} {deck_d / 2000:.4f} {cam.height_mm / 1000:.3f}"
             xyaxes="1 0 0 0 1 0" fovy="{cam.fovy_deg:.4f}"/>
@@ -226,9 +257,12 @@ class DeckScene:
 
     def _upload_textures(self) -> None:
         # NOTE: uses the Renderer's private mjrContext; there is no public handle.
+        contexts = [self._renderer._mjr_context]
+        if self._tool_renderer is not None:
+            contexts.append(self._tool_renderer._mjr_context)
         for tex_id in self._tex_ids:
-            mujoco.mjr_uploadTexture(self.model, self._renderer._mjr_context,
-                                     tex_id)
+            for ctx in contexts:
+                mujoco.mjr_uploadTexture(self.model, ctx, tex_id)
 
     def set_screen(self, canvas_bgr: np.ndarray) -> None:
         """Replace the DUT screen texture and re-upload it to the GL context."""
@@ -243,5 +277,64 @@ class DeckScene:
         frame_rgb = self._renderer.render()
         return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)[::-1].copy()
 
+    def render_toolcam(self) -> np.ndarray:
+        """Render the toolhead camera from its current pose (BGR, v-flipped)."""
+        if self._tool_renderer is None:
+            cam = gantry.TOOL_CAMERA
+            self._tool_renderer = mujoco.Renderer(
+                self.model, height=cam.height_px, width=cam.width_px)
+            self._upload_textures()  # the new context needs the textures too
+        self._tool_renderer.update_scene(self.data, camera="toolcam")
+        frame_rgb = self._tool_renderer.render()
+        return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)[::-1].copy()
+
+    # -- gantry (M2) -----------------------------------------------------------
+
+    @property
+    def toolhead_position_mm(self) -> tuple[float, float]:
+        """Toolhead carriage centre in deck mm."""
+        return (float(self.data.qpos[self._qx]) * 1000.0,
+                float(self.data.qpos[self._qy]) * 1000.0)
+
+    def _toolhead_contacts(self) -> list[tuple[str, str]]:
+        """Geom-name pairs currently in contact that involve the toolhead."""
+        pairs = []
+        for i in range(self.data.ncon):
+            con = self.data.contact[i]
+            names = tuple(
+                mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g) or ""
+                for g in (con.geom1, con.geom2))
+            if any(n.startswith("tool_") for n in names):
+                pairs.append(tuple(sorted(names)))
+        return pairs
+
+    @property
+    def collision_pairs(self) -> list[tuple[str, str]]:
+        """Unique toolhead contacts seen during the last move plus right now."""
+        return sorted(set(self._move_contacts)
+                      | set(self._toolhead_contacts()))
+
+    def move_toolhead(self, x: float, y: float,
+                      speed_mm_s: float = gantry.DEFAULT_SPEED_MM_S,
+                      dt_s: float = gantry.DEFAULT_DT_S) -> None:
+        """Kinematically drive the toolhead to deck (x, y) mm.
+
+        Interpolates at fixed dt (deterministic), stepping the slide joints
+        and re-running contact evaluation at every waypoint; contacts found
+        along the path are kept in :attr:`collision_pairs` until the next
+        move. Out-of-travel targets raise ValueError — see
+        :func:`steropes.gantry.clamp_to_deck` for the clamping variant.
+        """
+        gantry.check_deck_limits(x, y)
+        self._move_contacts = []
+        start = self.toolhead_position_mm
+        for px, py in gantry.interpolate(start, (x, y), speed_mm_s, dt_s):
+            self.data.qpos[self._qx] = px / 1000.0
+            self.data.qpos[self._qy] = py / 1000.0
+            mujoco.mj_forward(self.model, self.data)
+            self._move_contacts.extend(self._toolhead_contacts())
+
     def close(self) -> None:
         self._renderer.close()
+        if self._tool_renderer is not None:
+            self._tool_renderer.close()

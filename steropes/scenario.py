@@ -24,6 +24,7 @@ and exits non-zero if any step fails.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -151,13 +152,22 @@ class ScenarioRunner:
         ctx.rectified = None  # stale; must be re-rendered + rectified
         return f"dut state: {ctx.dut.state}"
 
-    def _step_render(self, ctx: _Context, save: str | None = None) -> str:
+    def _step_render(self, ctx: _Context, save: str | None = None,
+                     camera: str = "overhead") -> str:
         ctx.scene.set_screen(ctx.dut.render_screen())
-        ctx.frame = ctx.scene.render_overhead()
-        ctx.rectified = None
+        if camera == "overhead":
+            ctx.frame = ctx.scene.render_overhead()
+            ctx.rectified = None
+            frame = ctx.frame
+        elif camera == "toolcam":
+            # Toolcam frames are artifacts only; ctx.frame stays the overhead
+            # frame that the vision pipeline (calibrate/rectify) consumes.
+            frame = ctx.scene.render_toolcam()
+        else:
+            raise StepFailure(f"unknown camera {camera!r} (overhead|toolcam)")
         if save:
-            self._save(save, ctx.frame)
-        return f"frame {ctx.frame.shape[1]}x{ctx.frame.shape[0]}"
+            self._save(save, frame)
+        return f"{camera} frame {frame.shape[1]}x{frame.shape[0]}"
 
     def _step_calibrate(self, ctx: _Context) -> str:
         frame = _need(ctx.frame, "calibrate (render first)")
@@ -242,6 +252,35 @@ class ScenarioRunner:
             raise StepFailure(f"screen reads {best!r} (score {score:.3f}), "
                               f"expected {value!r}")
         return f"{best!r} (score {score:.3f})"
+
+    # -- gantry steps (M2) ----------------------------------------------------
+
+    def _step_move_toolhead(self, ctx: _Context, x: float, y: float) -> str:
+        ctx.scene.move_toolhead(float(x), float(y))
+        px, py = ctx.scene.toolhead_position_mm
+        return f"toolhead at ({px:.2f}, {py:.2f}) mm"
+
+    def _step_expect_toolhead_at(self, ctx: _Context, x: float, y: float,
+                                 tol_mm: float = 0.5) -> str:
+        px, py = ctx.scene.toolhead_position_mm
+        err = math.hypot(px - float(x), py - float(y))
+        if err > tol_mm:
+            raise StepFailure(f"toolhead at ({px:.2f}, {py:.2f}) mm, "
+                              f"{err:.3f} mm from ({x}, {y}) > tol {tol_mm}")
+        return f"err {err:.3f} mm <= {tol_mm} mm"
+
+    def _step_expect_no_collision(self, ctx: _Context) -> str:
+        pairs = ctx.scene.collision_pairs
+        if pairs:
+            raise StepFailure(f"unexpected toolhead contact: {pairs}")
+        return "no toolhead contacts"
+
+    def _step_expect_collision(self, ctx: _Context) -> str:
+        pairs = ctx.scene.collision_pairs
+        if not pairs:
+            raise StepFailure("expected toolhead contact, none detected "
+                              "(collision guard may be vacuous)")
+        return f"contact: {pairs}"
 
 
 def main(argv: list[str] | None = None) -> int:

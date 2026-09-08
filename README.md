@@ -73,8 +73,12 @@ Each milestone stands alone — if the project stalls, what's built is still use
   `python -m steropes.scenario scenarios/pin_purchase.yaml` — a rendered keypad is
   decoded by template OCR, a PIN is planned and entered, and the result screen
   reads back APPROVED from the re-rendered frame.
-- **M2 — Kinematic gantry.** Toolhead moves along rails; toolcam renders from real
-  poses; motion paths collision-checked against the scene.
+- **M2 — Kinematic gantry. DONE.** Toolhead moves along rails; toolcam renders
+  from real poses; motion paths collision-checked against the scene. Proof:
+  `python -m steropes.scenario scenarios/gantry_moves.yaml scenarios/collision_guard.yaml`
+  — the toolhead tracks waypoints (including over the terminal) with toolcam
+  frames from each pose and no contact, then a deliberate intercept path trips
+  the contact guard.
 - **M3 — Contacts.** Key actuation with spring-damper keys, card grip/insert/eject
   with friction and compliance.
 - **M4 — Closed loop.** Moonraker-emulating server in front of the physics backend;
@@ -91,9 +95,10 @@ scope by design.
 
 ## Status
 
-Pre-alpha. M1 (static scene + cameras + vision loop) is complete and covered by
-scenario tests; the package is importable and `pytest` is green. Everything past
-M1 is design scaffold — see the roadmap above.
+Pre-alpha. M1 (static scene + cameras + vision loop) and M2 (kinematic
+gantry + collision guard) are complete and covered by scenario tests; the
+package is importable and `pytest` is green. Everything past M2 is design
+scaffold — see the roadmap above.
 
 ## License
 

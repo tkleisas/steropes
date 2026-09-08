@@ -1,0 +1,22 @@
+# M2 negative test: deliberately drive the toolhead across the terminal's
+# raised back strip (printer hump) and assert the guard reports contact —
+# proves expect_no_collision is not vacuous. The final pose itself is clear
+# of the hump, so this relies on contact being detected *along the path*.
+name: collision_guard
+profile: ../profiles/countertop_pos_v1.yaml
+seed: 7
+steps:
+  - action: render
+    save: 01_overhead.png
+  - action: move_toolhead
+    x: 60.0
+    y: 240.0
+  - action: expect_no_collision   # clean travel: the guard discriminates
+  - action: move_toolhead
+    x: 200.0
+    y: 240.0
+  - action: expect_no_collision
+  - action: move_toolhead
+    x: 200.0
+    y: 100.0                      # intercepts the riser (y 160..185 mm)
+  - action: expect_collision

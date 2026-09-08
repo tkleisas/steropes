@@ -1,0 +1,54 @@
+# M2: kinematic gantry — calibrate from the overhead camera, move the
+# toolhead through waypoints (including over the terminal, which is clear at
+# cruise height), render the toolcam from each real pose, and verify position
+# tracking plus the no-collision guard.
+name: gantry_moves
+profile: ../profiles/countertop_pos_v1.yaml
+seed: 7
+steps:
+  - action: render
+    save: 01_overhead.png
+  - action: calibrate
+  - action: expect_homography_rms_below
+    value: 0.5
+  - action: move_toolhead
+    x: 80.0
+    y: 250.0
+  - action: expect_toolhead_at
+    x: 80.0
+    y: 250.0
+    tol_mm: 0.5
+  - action: render
+    camera: toolcam
+    save: 02_toolcam_corner.png
+  - action: expect_no_collision
+  - action: move_toolhead
+    x: 80.0
+    y: 100.0
+  - action: expect_toolhead_at
+    x: 80.0
+    y: 100.0
+    tol_mm: 0.5
+  - action: expect_no_collision
+  - action: move_toolhead
+    x: 200.0
+    y: 100.0                    # over the terminal screen — clear at cruise
+  - action: expect_toolhead_at
+    x: 200.0
+    y: 100.0
+    tol_mm: 0.5
+  - action: render
+    camera: toolcam
+    save: 03_toolcam_terminal.png
+  - action: expect_no_collision
+  - action: move_toolhead
+    x: 340.0
+    y: 100.0
+  - action: expect_toolhead_at
+    x: 340.0
+    y: 100.0
+    tol_mm: 0.5
+  - action: render
+    camera: toolcam
+    save: 04_toolcam_far.png
+  - action: expect_no_collision
