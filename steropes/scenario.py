@@ -33,6 +33,7 @@ import cv2
 import yaml
 
 from . import deck as deck_const
+from . import phone as phone_mod
 from . import touch
 from . import vision
 from .dut import DeviceUnderTest
@@ -58,9 +59,15 @@ class _Context:
 
     def __init__(self, profile: TerminalProfile, seed: int,
                  workdir: Path) -> None:
-        self.dut = DeviceUnderTest(pin=profile.pin, seed=seed,
-                                   cols=profile.keypad_cols,
-                                   rows=profile.keypad_rows)
+        if profile.dut == "phone":
+            self.dut = phone_mod.PhoneDUT(
+                pin=profile.pin,
+                apps=[(a.name, a.label, a.x, a.y) for a in profile.apps]
+                or None)
+        else:
+            self.dut = DeviceUnderTest(pin=profile.pin, seed=seed,
+                                       cols=profile.keypad_cols,
+                                       rows=profile.keypad_rows)
         self.scene = DeckScene(
             profile,
             screen_shape=(self.dut.render_screen().shape[0],
@@ -156,7 +163,7 @@ class ScenarioRunner:
 
     def _step_render(self, ctx: _Context, save: str | None = None,
                      camera: str = "overhead") -> str:
-        ctx.scene.set_screen(ctx.dut.render_screen())
+        ctx.scene.set_screen(ctx.dut.render_for_deck())
         if camera == "overhead":
             ctx.frame = ctx.scene.render_overhead()
             ctx.rectified = None
@@ -255,6 +262,20 @@ class ScenarioRunner:
                               f"expected {value!r}")
         return f"{best!r} (score {score:.3f})"
 
+    def _step_expect_text_present(self, ctx: _Context, value: str,
+                                  threshold: float = 0.7) -> str:
+        """Template-match ``value`` anywhere on the rectified screen.
+
+        Same recipe as the host stack's ``assert_text`` fallback, so passing
+        here means the unmodified client would read the screen too.
+        """
+        rectified = self._rectify_now(ctx)
+        score = vision.text_score(rectified, value)
+        if score < float(threshold):
+            raise StepFailure(f"text {value!r} not found on screen "
+                              f"(best match {score:.3f} < {threshold})")
+        return f"{value!r} (score {score:.3f})"
+
     # -- gantry steps (M2) ----------------------------------------------------
 
     def _step_move_toolhead(self, ctx: _Context, x: float, y: float) -> str:
@@ -344,6 +365,75 @@ class ScenarioRunner:
         if peak >= float(n):
             raise StepFailure(f"peak tap force {peak:.2f} N >= {n} N")
         return f"peak {peak:.2f} N < {n} N"
+
+    # -- phone steps (M4) -------------------------------------------------------
+
+    def _route_phone_tap(self, ctx: _Context, outcome) -> None:
+        """Feed a contact-derived screen fraction to the phone; misses never
+        reach it."""
+        if outcome.geom == "screen_surface" and outcome.contact_mm is not None:
+            fx, fy = phone_mod.mm_to_screen_fraction(
+                self.profile.screen_polygon_mm, *outcome.contact_mm)
+            ctx.dut.tap(fx, fy)
+
+    def _step_phone_press_button(self, ctx: _Context, name: str) -> str:
+        """Physically tap a button pad; the contact geom routes the press."""
+        pads = {b.name: b for b in self.profile.buttons}
+        if name not in pads:
+            raise StepFailure(f"profile has no button named {name!r} "
+                              f"(known: {sorted(pads)})")
+        outcome = ctx.scene.tap_finger(*pads[name].pad_mm)
+        ctx.taps.append(outcome)
+        if outcome.geom != f"button_pad_{name}":
+            raise StepFailure(f"button pad miss: hit {outcome.geom} "
+                              f"(expected button_pad_{name})")
+        ctx.dut.press_button(name)
+        return f"button {name} pressed ({outcome.peak_force_n:.2f} N)"
+
+    def _step_phone_tap(self, ctx: _Context, at: list[float]) -> str:
+        """Physically tap a screen fraction [fx, fy] (origin top-left)."""
+        fx, fy = float(at[0]), float(at[1])
+        x, y = phone_mod.screen_fraction_to_mm(
+            self.profile.screen_polygon_mm, fx, fy)
+        outcome = ctx.scene.tap_finger(x, y)
+        ctx.taps.append(outcome)
+        self._route_phone_tap(ctx, outcome)
+        if outcome.geom != "screen_surface":
+            return f"miss (hit {outcome.geom}, {outcome.peak_force_n:.2f} N)"
+        return (f"fraction ({fx:.2f}, {fy:.2f}) at {outcome.contact_mm}, "
+                f"{outcome.peak_force_n:.2f} N")
+
+    def _step_phone_swipe(self, ctx: _Context, **params) -> str:
+        """Physically drag the finger between two screen fractions."""
+        fx1, fy1 = (float(v) for v in params["from"])
+        fx2, fy2 = (float(v) for v in params["to"])
+        duration = float(params.get("duration_s", 0.4))
+        poly = self.profile.screen_polygon_mm
+        x1, y1 = phone_mod.screen_fraction_to_mm(poly, fx1, fy1)
+        x2, y2 = phone_mod.screen_fraction_to_mm(poly, fx2, fy2)
+        outcome = ctx.scene.swipe_finger(x1, y1, x2, y2, duration)
+        if not outcome.contacts_mm:
+            raise StepFailure(f"swipe touched no screen (hit {outcome.geom}) "
+                              "— gesture not delivered")
+        c1 = phone_mod.mm_to_screen_fraction(poly, *outcome.contacts_mm[0])
+        c2 = phone_mod.mm_to_screen_fraction(poly, *outcome.contacts_mm[-1])
+        ctx.dut.swipe(c1[0], c1[1], c2[0], c2[1])
+        return (f"swipe {c1} -> {c2} ({len(outcome.contacts_mm)} contacts, "
+                f"peak {outcome.peak_force_n:.2f} N)")
+
+    def _step_phone_enter_pin(self, ctx: _Context, pin: str | None = None) -> str:
+        """Physically tap out a PIN (default: the profile's) digit by digit."""
+        pin = str(pin) if pin is not None else self.profile.pin
+        poly = self.profile.screen_polygon_mm
+        for digit in pin:
+            fx, fy = phone_mod.PIN_PAD_FRACTIONS[digit]
+            x, y = phone_mod.screen_fraction_to_mm(poly, fx, fy)
+            outcome = ctx.scene.tap_finger(x, y)
+            ctx.taps.append(outcome)
+            self._route_phone_tap(ctx, outcome)
+        peak = max(t.peak_force_n for t in ctx.taps[-len(pin):])
+        return (f"entered {len(pin)}-digit PIN physically "
+                f"(peak {peak:.2f} N); dut state: {ctx.dut.state}")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -9,8 +9,8 @@ Everything here is standard computer vision implemented from first principles
 - Template-matching OCR: digit glyphs and short status strings are compared
   against freshly rendered reference bitmaps with normalized cross-correlation.
 
-Frames are BGR ``uint8`` in the deck image convention (pixel_y grows with
-deck +Y; see :mod:`steropes.deck`).
+Frames are BGR ``uint8`` in the deck image convention (deck +Y is image-up;
+see :mod:`steropes.deck`).
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 # --- ArUco detection -----------------------------------------------------------
 
 def detect_markers(frame_bgr: np.ndarray,
-                   dictionary_name: str = "DICT_5X5_50") -> dict[int, tuple[float, float]]:
+                   dictionary_name: str = "DICT_4X4_50") -> dict[int, tuple[float, float]]:
     """Detect ArUco markers; returns marker id -> centre (x, y) in pixels."""
     dictionary = cv2.aruco.getPredefinedDictionary(
         getattr(cv2.aruco, dictionary_name))
@@ -108,7 +108,7 @@ class Homography:
 
 def calibrate(frame_bgr: np.ndarray,
               deck_markers: dict[int, tuple[float, float]],
-              dictionary_name: str = "DICT_5X5_50"
+              dictionary_name: str = "DICT_4X4_50"
               ) -> tuple[Homography, dict[int, tuple[float, float]], float]:
     """Detect deck markers and solve the deck->pixel homography.
 
@@ -304,3 +304,21 @@ def match_text_line(image_bgr: np.ndarray,
               for text in candidates}
     best = max(scores, key=scores.get)  # type: ignore[arg-type]
     return best, scores[best]
+
+
+def text_score(image_bgr: np.ndarray, text: str, scale: float = 2.0,
+               thickness: int = 3) -> float:
+    """Best NCC score of a putText-rendered ``text`` template over the image.
+
+    Same recipe as the host stack's template fallback (white text on black,
+    ``TM_CCOEFF_NORMED`` over the whole frame, defaults scale 2.0 /
+    thickness 3), so a screen that scores well here is legible to the
+    unmodified client's ``assert_text``.
+    """
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) if image_bgr.ndim == 3 \
+        else image_bgr
+    (tw, th), baseline = cv2.getTextSize(text, FONT, scale, thickness)
+    template = np.zeros((th + baseline + 8, tw + 8), np.uint8)
+    cv2.putText(template, text, (4, th + 2), FONT, scale, 255, thickness,
+                cv2.LINE_AA)
+    return float(cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED).max())

@@ -43,6 +43,17 @@ class TapOutcome:
     peak_force_n: float
 
 
+@dataclass
+class SwipeOutcome:
+    """What one physical swipe actually did (all derived from contacts)."""
+
+    start_mm: tuple[float, float]              # commanded drag start
+    end_mm: tuple[float, float]                # commanded drag end
+    contacts_mm: list[tuple[float, float]]     # screen contacts along the drag
+    geom: str | None                           # geom hit at peak force
+    peak_force_n: float
+
+
 # --- screen grid geometry (deck mm) ---------------------------------------------
 # Screen polygon order is TL TR BR BL in the deck image convention (+Y up),
 # so keypad row 0 is the top (max Y) edge.

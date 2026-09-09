@@ -53,6 +53,9 @@ pip install -e ".[dev]"
 # run a scenario against the physics-rendered scene
 python -m steropes.scenario scenarios/keypad_ocr.yaml
 
+# serve the twin over a Moonraker-compatible HTTP API (phone DUT)
+python -m steropes.server --profile profiles/android_phone_v1.yaml --port 7125
+
 # run the full test suite (all scenarios, headless)
 pytest
 ```
@@ -89,9 +92,21 @@ Each milestone stands alone — if the project stalls, what's built is still use
   M1 flagship done for real: READY → keypad OCR → planned PIN tapped
   physically (~3.3 N peak) → re-rendered screen reads APPROVED. (Card
   grip/insert/eject is out of scope for this DUT.)
-- **M4 — Closed loop.** Moonraker-emulating server in front of the physics backend;
-  an unmodified Klipper-style host stack runs scenarios against it; CI tier +
-  drift guards against the reference machine's CAD and firmware configuration.
+- **M4 — Closed loop (first half). DONE.** A Moonraker-emulating HTTP server
+  sits in front of the physics backend and an Android-phone DUT (lock screen
+  → swipe-up → PIN pad → launcher with tappable, text-labeled apps) lives on
+  the deck. The macro contract — `HOME_ALL`, `TOOLS_UP`, `FINGER_TAP X Y`,
+  `FINGER_SWIPE X1 Y1 X2 Y2 T`, `FINGER_LONG_PRESS X Y T`,
+  `BUTTON_PRESS PLUNGER`, `PARK` — executes against the physics (compliant
+  finger, contact-routed); status reports strict Klipper states; overhead and
+  toolcam frames are served as PNG snapshots and MJPEG streams. Proof:
+  `python -m steropes.server --profile profiles/android_phone_v1.yaml --port 7125`
+  in one shell, then the host stack's own `smoke_wake_unlock` scenario,
+  UNMODIFIED, passes against it (calibration RMS 0.161 mm, "Home" read off
+  the rectified rendered screen). The same flow runs without the server:
+  `python -m steropes.scenario scenarios/phone_wake_unlock.yaml`. Remaining
+  for M4's second half: CI tier + drift guards against the reference
+  machine's CAD and firmware configuration.
 
 ## Reality gap — an honest note
 
@@ -104,11 +119,13 @@ scope by design.
 ## Status
 
 Pre-alpha. M1 (static scene + cameras + vision loop), M2 (kinematic
-gantry + collision guard), and M3 (physical screen taps with compliant
-finger, contact-derived registration, and per-tap force budget) are
-complete and covered by scenario tests; the package is importable and
-`pytest` is green. Everything past M3 is design scaffold — see the
-roadmap above.
+gantry + collision guard), M3 (physical screen taps with compliant
+finger, contact-derived registration, and per-tap force budget), and the
+first half of M4 (Moonraker-compatible HTTP server + Android-phone DUT;
+an unmodified Klipper-style host stack runs its wake→unlock scenario
+against the twin) are complete and covered by scenario tests; the package
+is importable and `pytest` is green. Everything past that is design
+scaffold — see the roadmap above.
 
 ## License
 

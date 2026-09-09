@@ -8,11 +8,13 @@ kinematic M2 toolhead with its own downward camera (see
 toolhead camera.
 
 Frame convention: the physical straight-down camera shows deck +Y as
-image-up; rendered frames are flipped vertically on read-out so pixel_y grows
-with deck +Y (the deck image convention). Marker textures are pre-flipped so
-the ArUco codes appear unmirrored in the final frame. The vision pipeline is
-convention-agnostic (registration flows through the solved homography), but a
-fixed convention keeps saved frames directly comparable across runs.
+image-up, and rendered frames are served as-is (pixel row 0 = deck +Y max),
+matching the host stack's camera convention. Marker textures are rotated 180°
+so the ArUco codes read correctly in the frame with pattern corner 0 toward
+deck (+x, -y) — the placement the client's deck calibration assumes. The
+vision pipeline is convention-agnostic (registration flows through the solved
+homography), but a fixed convention keeps saved frames directly comparable
+across runs.
 
 Texture updates: the DUT screen is a model texture whose pixels are rewritten
 (:meth:`DeckScene.set_screen`) and re-uploaded to the GL context whenever the
@@ -53,12 +55,41 @@ f 1/1 3/3 4/4
 # --- terminal profile ------------------------------------------------------------
 
 @dataclass(frozen=True)
+class ButtonPad:
+    """A physical side button's stand-in: a top-accessible pad on the deck.
+
+    M4 simplification: real side buttons are pressed by horizontal servo
+    plungers; the twin models each button as a small raised pad next to the
+    device body that the vertical finger taps. ``plunger`` is the name the
+    host's BUTTON_PRESS macro addresses (as in the Klipper config).
+    """
+
+    name: str
+    plunger: str
+    pad_mm: tuple[float, float]  # pad centre in deck mm
+
+
+@dataclass(frozen=True)
+class AppIcon:
+    """A launcher icon: label plus centre in screen-relative fractions."""
+
+    name: str
+    label: str
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
 class TerminalProfile:
     """DUT geometry on the deck, from a YAML profile.
 
     ``screen_polygon_mm`` holds the screen corners in deck mm in the order
     top-left, top-right, bottom-right, bottom-left (as seen in the deck image
     convention).
+
+    ``dut`` selects the device model ("pos" keypad terminal or "phone").
+    ``riser_height_mm`` <= 0 drops the raised back strip (a phone has no
+    printer hump). ``buttons``/``apps`` are phone-profile extras.
     """
 
     name: str
@@ -69,11 +100,16 @@ class TerminalProfile:
     keypad_cols: int
     keypad_rows: int
     pin: str
+    dut: str = "pos"
+    riser_height_mm: float = gantry.TERMINAL_RISER_HEIGHT_MM
+    buttons: tuple[ButtonPad, ...] = ()
+    apps: tuple[AppIcon, ...] = ()
 
 
 def load_profile(path: str | Path) -> TerminalProfile:
     """Load a terminal profile YAML (see ``profiles/`` for an example)."""
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    riser = raw.get("riser") or {}
     return TerminalProfile(
         name=raw["name"],
         body_center_mm=tuple(raw["body"]["center_mm"]),
@@ -83,6 +119,18 @@ def load_profile(path: str | Path) -> TerminalProfile:
         keypad_cols=int(raw["keypad"]["cols"]),
         keypad_rows=int(raw["keypad"]["rows"]),
         pin=str(raw["pin"]),
+        dut=str(raw.get("dut", "pos")),
+        riser_height_mm=float(riser.get("height_mm",
+                                        gantry.TERMINAL_RISER_HEIGHT_MM)),
+        buttons=tuple(
+            ButtonPad(name=str(name), plunger=str(spec["plunger"]),
+                      pad_mm=tuple(spec["pad_mm"]))
+            for name, spec in (raw.get("buttons") or {}).items()),
+        apps=tuple(
+            AppIcon(name=str(spec["name"]), label=str(spec.get("label",
+                                                               spec["name"])),
+                    x=float(spec["x"]), y=float(spec["y"]))
+            for spec in (raw.get("apps") or [])),
     )
 
 
@@ -135,9 +183,12 @@ class DeckScene:
         self._tex_ids = [
             self._write_texture("screen", np.zeros(screen_shape, np.uint8))]
         for mid in deck_const.DECK_MARKERS:
-            # vflip: the global frame v-flip must not mirror the codes
+            # rot180: the global frame v-flip must not mirror the codes, and
+            # pattern corner 0 (top-left of the generated code) must sit
+            # toward deck (+x, -y) — the placement convention the host
+            # stack's deck calibration assumes.
             self._tex_ids.append(self._write_texture(
-                f"marker_{mid}", marker_tile(mid), vflip=True))
+                f"marker_{mid}", marker_tile(mid), rot180=True))
 
         self._renderer = mujoco.Renderer(
             self.model, height=camera.height_px, width=camera.width_px)
@@ -187,9 +238,27 @@ class DeckScene:
         # reaches the toolhead/finger envelope, so a scripted XY path can
         # genuinely intercept the terminal while cruise travel over the flat
         # region stays clear. Full footprint width, 25 mm deep, +Y edge.
-        riser_h = gantry.TERMINAL_RISER_HEIGHT_MM
+        # Profiles with riser_height_mm <= 0 (a phone has no hump) skip it.
+        riser_h = self.profile.riser_height_mm
         riser_hy = 12.5
         riser_cy = bcy + bhy - riser_hy
+        riser_geom = ""
+        if riser_h > 0.0:
+            riser_geom = f"""
+    <geom name="terminal_riser" type="box"
+          size="{bhx / 1000:.4f} {riser_hy / 1000:.4f} {riser_h / 2000:.4f}"
+          pos="{bcx / 1000:.4f} {riser_cy / 1000:.4f} {riser_h / 2000:.4f}"
+          rgba="0.2 0.2 0.24 1"/>"""
+
+        # Button pads (M4): top-accessible stand-ins for side buttons; the
+        # finger taps them vertically and the contact geom name routes the
+        # press to the DUT (see ButtonPad).
+        pad_geoms = "\n".join(
+            f'    <geom name="button_pad_{b.name}" type="box"'
+            f' size="0.004 0.005 0.001"'
+            f' pos="{b.pad_mm[0] / 1000:.4f} {b.pad_mm[1] / 1000:.4f} 0.001"'
+            f' rgba="0.5 0.5 0.58 1"/>'
+            for b in self.profile.buttons)
 
         deck_w, deck_d = deck_const.DECK_WIDTH_MM, deck_const.DECK_DEPTH_MM
         tile_m = deck_const.MARKER_TILE_MM / 2000.0
@@ -238,10 +307,8 @@ class DeckScene:
           rgba="0 0 0 0"/>
     <!-- screen_surface: invisible contact skin for the flat (zero-volume,
          non-collidable) visual quad; its top face is the tap target. -->
-    <geom name="terminal_riser" type="box"
-          size="{bhx / 1000:.4f} {riser_hy / 1000:.4f} {riser_h / 2000:.4f}"
-          pos="{bcx / 1000:.4f} {riser_cy / 1000:.4f} {riser_h / 2000:.4f}"
-          rgba="0.2 0.2 0.24 1"/>
+{riser_geom}
+{pad_geoms}
 {marker_geoms}
 {gantry.toolhead_xml()}
     <camera name="overhead"
@@ -254,7 +321,7 @@ class DeckScene:
     # -- textures --------------------------------------------------------------
 
     def _write_texture(self, name: str, img: np.ndarray,
-                       vflip: bool = False) -> int:
+                       vflip: bool = False, rot180: bool = False) -> int:
         """Copy a grayscale or BGR image into a model texture's RGB data.
 
         tex_data layout is row-major, row 0 = texture top (v=1). Returns the
@@ -268,6 +335,8 @@ class DeckScene:
             rgb = img[:, :, ::-1]  # BGR -> RGB
         if vflip:
             rgb = rgb[::-1]
+        if rot180:
+            rgb = rgb[::-1, ::-1]
         if rgb.shape[:2] != (h, w):
             rgb = cv2.resize(rgb, (w, h), interpolation=cv2.INTER_NEAREST)
         adr = self.model.tex_adr[tex_id]
@@ -291,13 +360,13 @@ class DeckScene:
     # -- rendering ---------------------------------------------------------------
 
     def render_overhead(self) -> np.ndarray:
-        """Render the overhead camera; returns a BGR frame (v-flip applied)."""
+        """Render the overhead camera; returns a BGR frame (row 0 = deck +Y)."""
         self._renderer.update_scene(self.data, camera="overhead")
         frame_rgb = self._renderer.render()
-        return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)[::-1].copy()
+        return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR).copy()
 
     def render_toolcam(self) -> np.ndarray:
-        """Render the toolhead camera from its current pose (BGR, v-flipped)."""
+        """Render the toolhead camera from its current pose (BGR)."""
         if self._tool_renderer is None:
             cam = gantry.TOOL_CAMERA
             self._tool_renderer = mujoco.Renderer(
@@ -305,7 +374,7 @@ class DeckScene:
             self._upload_textures()  # the new context needs the textures too
         self._tool_renderer.update_scene(self.data, camera="toolcam")
         frame_rgb = self._tool_renderer.render()
-        return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)[::-1].copy()
+        return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR).copy()
 
     # -- gantry (M2) -----------------------------------------------------------
 
@@ -358,7 +427,8 @@ class DeckScene:
     def tap_finger(self, x: float, y: float,
                    descend_mm: float = touch.DEFAULT_DESCEND_MM,
                    stiffness: float | None = None,
-                   damping: float | None = None) -> touch.TapOutcome:
+                   damping: float | None = None,
+                   hold_s: float = touch.TAP_HOLD_S) -> touch.TapOutcome:
         """Physically tap deck point (x, y) mm with the compliant finger.
 
         Moves the toolhead so the finger tip is over (x, y), then ramps the
@@ -369,7 +439,8 @@ class DeckScene:
         the keypad cell is derived from that contact point, never from the
         commanded (x, y). Deterministic: fixed model dt, fixed step counts.
         ``stiffness``/``damping`` temporarily override the joint compliance
-        (N/m, N·s/m) and are restored afterwards.
+        (N/m, N·s/m) and are restored afterwards. ``hold_s`` is the settle
+        time at full overtravel (a long press holds longer).
         """
         jnt = self._jz_joint
         dof = self.model.jnt_dofadr[jnt]  # joint damping lives per-DOF
@@ -385,7 +456,7 @@ class DeckScene:
             self._tap_peak: dict = {"force": 0.0, "pos": None, "geom": None}
             ref = descend_mm / 1000.0
             self._ramp_finger(ref)                 # descend
-            self._hold_finger(touch.TAP_HOLD_S)    # settle at overtravel
+            self._hold_finger(hold_s)              # settle at overtravel
             outcome = self._tap_outcome((x, y))
             self._ramp_finger(0.0, track=False)    # retract
             self._hold_finger(touch.TAP_SETTLE_S, track=False)
@@ -398,6 +469,63 @@ class DeckScene:
         self.data.qvel[dof] = 0.0
         mujoco.mj_forward(self.model, self.data)
         return outcome
+
+    def swipe_finger(self, x1: float, y1: float, x2: float, y2: float,
+                     duration_s: float = 0.4) -> touch.SwipeOutcome:
+        """Physically drag the finger across the deck, (x1, y1) -> (x2, y2) mm.
+
+        Descends onto the start point like a tap, then drags the pressed
+        finger along the straight line at fixed dt (kinematic XY with full
+        contact dynamics, as in :meth:`tap_finger`), and retracts at the end.
+        Screen contact points along the drag are collected from the physics
+        engine; the DUT gesture is routed from those, not from the commanded
+        endpoints.
+        """
+        gantry.check_deck_limits(x2, y2)
+        fx, fy = gantry.FINGER_OFFSET_MM[0], gantry.FINGER_OFFSET_MM[1]
+        self.move_toolhead(x1 - fx, y1 - fy)
+        self._tap_peak = {"force": 0.0, "pos": None, "geom": None}
+        contacts: list[tuple[float, float]] = []
+        ref = touch.DEFAULT_DESCEND_MM / 1000.0
+        self._ramp_finger(ref)                     # press at the drag start
+        self._collect_screen_contacts(contacts)
+        dt = self.model.opt.timestep
+        n = max(1, round(duration_s / dt))
+        for i in range(1, n + 1):
+            px = x1 + (x2 - x1) * i / n
+            py = y1 + (y2 - y1) * i / n
+            self.data.qpos[self._qx] = (px - fx) / 1000.0
+            self.data.qpos[self._qy] = (py - fy) / 1000.0
+            mujoco.mj_step(self.model, self.data)
+            self._track_tap_peak()
+            self._collect_screen_contacts(contacts)
+        self._ramp_finger(0.0, track=False)        # retract at the drag end
+        self._hold_finger(touch.TAP_SETTLE_S, track=False)
+        self.model.qpos_spring[self._qz] = 0.0
+        # Re-anchor the plunger at cruise, as after a tap.
+        self.data.qpos[self._qz] = 0.0
+        self.data.qvel[self.model.jnt_dofadr[self._jz_joint]] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+        return touch.SwipeOutcome(start_mm=(x1, y1), end_mm=(x2, y2),
+                                  contacts_mm=contacts,
+                                  geom=self._tap_peak["geom"],
+                                  peak_force_n=self._tap_peak["force"])
+
+    def _collect_screen_contacts(self, out: list[tuple[float, float]]) -> None:
+        """Append current finger<->screen_surface contact points (deck mm)."""
+        for i in range(self.data.ncon):
+            con = self.data.contact[i]
+            if self._finger_geom not in (con.geom1, con.geom2):
+                continue
+            other = con.geom1 if con.geom2 == self._finger_geom else con.geom2
+            if mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM,
+                                 other) == "screen_surface":
+                out.append((float(con.pos[0]) * 1000.0,
+                            float(con.pos[1]) * 1000.0))
+
+    def settle(self, seconds: float = 0.1) -> None:
+        """Step the dynamics in place (TOOLS_UP / dwell settling)."""
+        self._hold_finger(seconds, track=False)
 
     def _ramp_finger(self, ref_to: float, track: bool = True) -> None:
         """Ramp the finger joint's spring reference at a fixed speed."""

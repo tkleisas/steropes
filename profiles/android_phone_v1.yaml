@@ -1,0 +1,54 @@
+# Android phone DUT profile: a generic ~6.1" slab phone lying face-up.
+#
+# GEOMETRY IS A SHARED CONTRACT: this mirrors the host stack's
+# devices/example_phone.yaml exactly (body 71.5 x 147.0 x 8.9 mm, nest origin
+# at deck (60, 80), and the same screen polygon), so the unmodified client
+# touches where the rendered UI actually is. Coordinates are deck millimetres
+# (origin at the deck's lower-left corner, +X right, +Y up); the screen
+# polygon lists corners TL, TR, BR, BL with TL at the (min x, min y) deck
+# corner — the client's convention, opposite in Y to the POS profile.
+name: android_phone_v1
+dut: phone
+
+body:
+  center_mm: [95.75, 153.5]      # nest origin (60, 80) + half footprint
+  footprint_mm: [71.5, 147.0]    # width x depth (thickness 8.9 not modeled)
+
+screen:
+  # 65.5 x 137 mm, from the host profile's screen_polygon verbatim.
+  polygon_mm:
+    - [63.0, 84.0]               # top-left (UI top is deck -Y for phones)
+    - [128.5, 84.0]              # top-right
+    - [128.5, 221.0]             # bottom-right
+    - [63.0, 221.0]              # bottom-left
+  canonical_px: [720, 1280]      # the client's rectify_screen default canvas
+
+keypad:
+  cols: 3                        # the PIN pad's fixed 3x4 layout
+  rows: 4
+
+pin: "1337"                      # the DUT's correct PIN
+
+riser:
+  height_mm: 0.0                 # a phone has no printer hump
+
+# Side buttons, modeled as top-accessible pads tapped by the vertical finger
+# (M4 simplification — real rigs use horizontal servo plungers). Pads sit
+# beside the phone's right edge at the host profile's button deck positions
+# (power/volume faces at x=134.5); `plunger` is what BUTTON_PRESS addresses.
+buttons:
+  power:
+    plunger: plunger_0
+    pad_mm: [136.0, 130.0]
+  volume_up:
+    plunger: plunger_1
+    pad_mm: [136.0, 110.0]
+  volume_down:
+    plunger: plunger_1
+    pad_mm: [136.0, 95.0]
+
+# Launcher icons in screen-relative fractions, matching the host profile's
+# launcher points.
+apps:
+  - {name: settings, label: Settings, x: 0.25, y: 0.40}
+  - {name: camera, label: Camera, x: 0.75, y: 0.40}

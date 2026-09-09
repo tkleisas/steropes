@@ -1,0 +1,58 @@
+# The M4 phone flagship through the local runner: wake via the physical
+# button pad, swipe up on the lock screen, tap out the PIN with the compliant
+# finger, and read Home back off the rectified rendered screen. Same flow the
+# HTTP path (steropes.server) exposes to the host stack.
+name: phone_wake_unlock
+profile: ../profiles/android_phone_v1.yaml
+seed: 0
+steps:
+  - action: render
+    save: 01_sleep.png
+  - action: phone_press_button      # physical tap on the power pad
+    name: power
+  - action: expect_dut_state
+    value: locked
+  - action: move_toolhead           # park aside so the camera sees the screen
+    x: 20.0
+    y: 150.0
+  - action: render
+    save: 02_locked.png
+  - action: expect_text_present
+    value: Locked
+  - action: phone_swipe             # lock screen -> PIN pad (physical drag)
+    from: [0.5, 0.9]
+    to: [0.5, 0.2]
+  - action: expect_dut_state
+    value: pin
+  - action: move_toolhead
+    x: 20.0
+    y: 150.0
+  - action: render
+    save: 03_pinpad.png
+  - action: expect_text_present
+    value: Enter PIN
+  - action: phone_enter_pin         # profile PIN, one finger tap per digit
+  - action: expect_dut_state
+    value: launcher
+  - action: expect_max_tap_force_below
+    n: 6.0
+  - action: move_toolhead
+    x: 20.0
+    y: 150.0
+  - action: render
+    save: 04_launcher.png
+  - action: expect_text_present
+    value: Home
+  - action: expect_text_present
+    value: Settings
+  - action: phone_tap               # open the Settings app
+    at: [0.25, 0.40]
+  - action: expect_dut_state
+    value: app
+  - action: move_toolhead
+    x: 20.0
+    y: 150.0
+  - action: render
+    save: 05_app.png
+  - action: expect_text_present
+    value: Settings

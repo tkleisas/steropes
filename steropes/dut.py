@@ -98,6 +98,11 @@ class DeviceUnderTest:
             self.tap(cell)
         return self.submit()
 
+    def render_for_deck(self) -> np.ndarray:
+        """Screen canvas as the deck texture needs it (identity for the POS:
+        its profile polygon puts top-left at the deck +Y edge)."""
+        return self.render_screen()
+
     # -- rendering --------------------------------------------------------------
 
     def render_screen(self) -> np.ndarray:
