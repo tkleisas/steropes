@@ -27,7 +27,10 @@ Moves before ``HOME_ALL`` are rejected, as on a real machine.
 
 All scene access (physics steps, texture uploads, renders) happens on one
 dedicated machine thread — the offscreen GL context is thread-affine, so HTTP
-handler threads only enqueue jobs and wait on results.
+handler threads only enqueue jobs and wait on results. When an interactive
+viewer shares the process (:mod:`steropes.viewer`), its ``viewer.sync()`` on
+the main thread also reads mjdata; that access is serialised against the
+machine thread's job execution by ``TwinMachine.data_lock``.
 
 CLI: ``python -m steropes.server --profile profiles/android_phone_v1.yaml
 --port 7125``
@@ -64,6 +67,16 @@ class MachineError(RuntimeError):
     """Raised for bad scripts, unknown macros, and machine faults."""
 
 
+def build_dut(profile: TerminalProfile, seed: int = 0) -> DeviceUnderTest:
+    """Build the DUT state model for a profile (phone or keypad terminal)."""
+    if profile.dut == "phone":
+        return PhoneDUT(pin=profile.pin,
+                        apps=[(a.name, a.label, a.x, a.y)
+                              for a in profile.apps] or None)
+    return DeviceUnderTest(pin=profile.pin, seed=seed,
+                           cols=profile.keypad_cols, rows=profile.keypad_rows)
+
+
 def _parse_params(tokens: list[str]) -> dict[str, str]:
     """Parse ``KEY=VALUE`` macro parameters (keys case-insensitive)."""
     params: dict[str, str] = {}
@@ -95,6 +108,12 @@ class TwinMachine:
                  seed: int = 0) -> None:
         self._jobs: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
+        #: Serialises mjdata/scene access between the machine thread and an
+        #: in-process interactive viewer's sync() (see steropes.viewer).
+        self.data_lock = threading.Lock()
+        #: Set whenever the screen texture changes; a viewer loop polls this
+        #: to re-upload the texture to its own GL context.
+        self.screen_changed = threading.Event()
         self._pending = 0          # scripts queued + executing
         self._state = "standby"
         self._message = ""
@@ -117,15 +136,7 @@ class TwinMachine:
     def _run(self, profile_path: Path, workdir: Path, seed: int) -> None:
         try:
             self.profile: TerminalProfile = load_profile(profile_path)
-            if self.profile.dut == "phone":
-                self.dut: DeviceUnderTest | PhoneDUT = PhoneDUT(
-                    pin=self.profile.pin,
-                    apps=[(a.name, a.label, a.x, a.y)
-                          for a in self.profile.apps] or None)
-            else:
-                self.dut = DeviceUnderTest(pin=self.profile.pin, seed=seed,
-                                           cols=self.profile.keypad_cols,
-                                           rows=self.profile.keypad_rows)
+            self.dut: DeviceUnderTest | PhoneDUT = build_dut(self.profile, seed)
             screen = self.dut.render_for_deck()
             self.scene = DeckScene(self.profile,
                                    screen_shape=screen.shape[:2],
@@ -143,11 +154,15 @@ class TwinMachine:
                 return
             kind = job[0]
             if kind == "script":
-                self._run_script(job[1])
+                # data_lock: mjdata must not be mid-script while a viewer
+                # syncs it on the main thread.
+                with self.data_lock:
+                    self._run_script(job[1])
             elif kind == "render":
                 _, camera, fmt, reply = job
                 try:
-                    reply.put(self._render(camera, fmt))
+                    with self.data_lock:
+                        reply.put(self._render(camera, fmt))
                 except BaseException as exc:
                     reply.put(exc)
 
@@ -349,6 +364,7 @@ class TwinMachine:
 
     def _refresh_screen(self) -> None:
         self.scene.set_screen(self.dut.render_for_deck())
+        self.screen_changed.set()  # an in-process viewer re-uploads the texture
 
 
 # --- HTTP layer ------------------------------------------------------------------

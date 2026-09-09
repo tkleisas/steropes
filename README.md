@@ -70,6 +70,32 @@ Scenarios print PASS/FAIL per step and save artifacts (rendered frames,
 rectified screens) under `out/<scenario-name>/`. See `scenarios/` for the
 YAML step vocabulary and `profiles/` for the terminal profile format.
 
+## Interactive viewing
+
+Windowed mode is for humans — CI stays headless. It uses MuJoCo's bundled
+interactive viewer (orbit/zoom/pause/speed included; the scene's `overhead`
+and `toolcam` cameras are selectable in the viewer's camera drop-down):
+
+```sh
+# just watch the scene, physics free-running
+python -m steropes.viewer --profile profiles/android_phone_v1.yaml
+
+# serve the visible sim over the Moonraker-compatible API — drive it from
+# another terminal with the unmodified host stack and watch it move
+python -m steropes.viewer --profile profiles/android_phone_v1.yaml --serve --port 7125
+
+# watch a scenario run live against the visible scene
+python -m steropes.viewer --profile profiles/android_phone_v1.yaml --scenario scenarios/phone_wake_unlock.yaml
+
+# manual smoke check: open the window, auto-close after N seconds, exit 0
+python -m steropes.viewer --profile profiles/android_phone_v1.yaml --serve --smoke 3
+```
+
+With no display/GL available the viewer exits with a clear message; use
+`-m steropes.server` headless instead. `--serve` and `--scenario` are
+mutually exclusive (in serve mode the machine thread owns the scene's GL
+contexts; drive it over HTTP).
+
 ## Roadmap
 
 Each milestone stands alone — if the project stalls, what's built is still useful.
@@ -210,7 +236,7 @@ screen taps with compliant finger, contact-derived registration, and
 per-tap force budget), and the first half of M4 (Moonraker-compatible
 HTTP server + Android-phone DUT; an unmodified Klipper-style host stack
 runs its wake→unlock scenario against the twin) are complete and covered
-by scenario tests; the package is importable and `pytest` is green (84
+by scenario tests; the package is importable and `pytest` is green (99
 tests). Everything past that is design scaffold — see the roadmap above.
 
 ## License

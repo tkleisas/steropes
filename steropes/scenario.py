@@ -90,9 +90,17 @@ def _need(value, what: str):
 
 
 class ScenarioRunner:
-    """Loads and executes one scenario YAML file."""
+    """Loads and executes one scenario YAML file.
 
-    def __init__(self, path: str | Path, out_root: str | Path = "out") -> None:
+    ``on_scene`` (optional) is called with the freshly built
+    :class:`steropes.scene.DeckScene` before the first step — used by
+    :mod:`steropes.viewer` to attach an interactive window to the scene the
+    scenario drives. ``scene_wrapper`` (optional) replaces ``ctx.scene`` with
+    a wrapper (e.g. the viewer's lock-guarded facade) for the run.
+    """
+
+    def __init__(self, path: str | Path, out_root: str | Path = "out",
+                 *, on_scene=None, scene_wrapper=None) -> None:
         self.path = Path(path)
         spec = yaml.safe_load(self.path.read_text(encoding="utf-8"))
         self.name: str = spec.get("name", self.path.stem)
@@ -101,6 +109,8 @@ class ScenarioRunner:
         self.seed = int(spec.get("seed", 0))
         self.steps: list[dict] = spec["steps"]
         self.out_dir = Path(out_root) / self.name
+        self._on_scene = on_scene
+        self._scene_wrapper = scene_wrapper
 
     # -- public API ---------------------------------------------------------
 
@@ -108,6 +118,10 @@ class ScenarioRunner:
         """Execute all steps; returns True when every step passed."""
         self.out_dir.mkdir(parents=True, exist_ok=True)
         ctx = _Context(self.profile, self.seed, self.out_dir)
+        if self._on_scene is not None:
+            self._on_scene(ctx.scene)
+        if self._scene_wrapper is not None:
+            ctx.scene = self._scene_wrapper(ctx.scene)
         print(f"scenario: {self.name}  (profile={self.profile.name}, "
               f"seed={self.seed})")
         results: list[StepResult] = []
