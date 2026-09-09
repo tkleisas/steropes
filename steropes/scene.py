@@ -313,7 +313,16 @@ class DeckScene:
 
         return f"""
 <mujoco>
-  <visual><global offwidth="{cam.width_px}" offheight="{cam.height_px}"/></visual>
+  <visual>
+    <global offwidth="{cam.width_px}" offheight="{cam.height_px}"/>
+    <!-- Studio look: the headlight stays on (it is the only light the
+         offscreen overhead/toolcam pipeline was tuned against, so its
+         diffuse/ambient are only nudged up) and two directional lights do
+         the real work. Markers and the screen are emission=1 materials,
+         so pipeline contrast is lighting-independent. -->
+    <headlight ambient="0.25 0.25 0.25" diffuse="0.35 0.35 0.35"
+               specular="0.1 0.1 0.1"/>
+  </visual>
   <asset>
     <texture name="screen" type="2d" builtin="flat" rgb1="0.1 0.1 0.1"
              width="{cw}" height="{ch}"/>
@@ -326,10 +335,27 @@ class DeckScene:
 {cad_assets}
   </asset>
   <worldbody>
+    <!-- Key + fill studio lights (directional; pos anchors the key light's
+         shadow camera over the deck). Only the key casts shadows. -->
+    <light name="key" directional="true" pos="0.2 0.35 0.4"
+           dir="-0.1 -0.3 -0.9" diffuse="0.6 0.6 0.6"
+           specular="0.2 0.2 0.2" castshadow="true"/>
+    <light name="fill" directional="true" pos="0.2 -0.1 0.3"
+           dir="0.1 0.35 -0.9" diffuse="0.4 0.4 0.45" specular="0 0 0"
+           ambient="0.08 0.08 0.1" castshadow="false"/>
+    <!-- Floor: matte plain-gray surround extending 60 mm past the deck on
+         every side (no grid — clean background for the fiducial detector).
+         Visual-only (no contact), 1 mm below the deck's underside. It fills
+         the black margins of the overhead frame with a realistic workbench
+         gray. -->
+    <geom name="floor" type="box"
+          size="{deck_w / 2000 + 0.06:.4f} {deck_d / 2000 + 0.06:.4f} 0.002"
+          pos="{deck_w / 2000:.4f} {deck_d / 2000:.4f} -0.013"
+          rgba="0.30 0.30 0.33 1" contype="0" conaffinity="0"/>
     <geom name="deck" type="box"
           size="{deck_w / 2000:.4f} {deck_d / 2000:.4f} 0.005"
           pos="{deck_w / 2000:.4f} {deck_d / 2000:.4f} -0.005"
-          rgba="0.216 0.216 0.216 1"/>
+          rgba="0.40 0.41 0.44 1"/>
     <geom name="terminal" type="box"
           size="{bhx / 1000:.4f} {bhy / 1000:.4f} 0.0005"
           pos="{bcx / 1000:.4f} {bcy / 1000:.4f} 0.0005"

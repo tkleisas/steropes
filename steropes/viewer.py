@@ -113,17 +113,18 @@ class LockedScene:
 
 
 def overview_camera(cam) -> None:
-    """Point the viewer's free camera at a top-down overview of the deck.
+    """Point the viewer's free camera at a slightly tilted deck overview.
 
-    The scene's fixed cameras (``overhead``, ``toolcam``) are listed in the
-    viewer's camera drop-down automatically; this is only the initial free
+    The scene's fixed cameras (``overhead``, ``toolcam``) stay selectable:
+    the ``[``/``]`` keys cycle Free -> overhead -> toolcam (Tab brings back
+    the UI pane with the camera drop-down). This is only the initial free
     camera pose.
     """
     cam.lookat[:] = (deck_const.DECK_WIDTH_MM / 2000.0,
                      deck_const.DECK_DEPTH_MM / 2000.0, 0.0)
     cam.distance = 0.55
     cam.azimuth = 90.0    # screen-up is deck +Y, matching the overhead frame
-    cam.elevation = -80.0
+    cam.elevation = -55.0  # slight perspective; the deck reads as a 3D object
 
 
 def run_viewer_loop(viewer, lock: threading.Lock, *, step=None,
@@ -159,7 +160,11 @@ def _open_viewer(model: mujoco.MjModel, data: mujoco.MjData,
                  screen_changed: threading.Event | None = None) -> None:
     """Launch the passive viewer on the main thread and run the loop."""
     tex_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, "screen")
-    with mujoco.viewer.launch_passive(model, data) as viewer:
+    # The bundled UI panes are hidden: collapsed they render as two floating
+    # gray rectangles around the scene (and are mis-laid-out under Windows
+    # DPI scaling). Tab brings them back; [ ] cycle the fixed cameras.
+    with mujoco.viewer.launch_passive(model, data, show_left_ui=False,
+                                      show_right_ui=False) as viewer:
         overview_camera(viewer.cam)
         run_viewer_loop(viewer, lock, step=step, smoke_s=smoke_s,
                         screen_changed=screen_changed, screen_tex_id=tex_id)
@@ -256,6 +261,7 @@ def _run_interactive(args: argparse.Namespace) -> int:
                 mujoco.mj_step(model, data)
 
     print("interactive twin: drag to orbit, scroll to zoom, "
+          "[ ] cycle cameras (Free/overhead/toolcam), Tab toggles UI panes, "
           "Space pauses; close the window or Ctrl-C to quit")
     try:
         _open_viewer(model, data, lock, step=step, smoke_s=args.smoke)
