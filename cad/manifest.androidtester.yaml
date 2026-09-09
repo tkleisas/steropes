@@ -1,0 +1,65 @@
+# cad/manifest.androidtester.yaml — the capstone: the twin wearing the
+# AndroidTester machine's REAL OpenSCAD parts as toolhead visuals.
+#
+# Sources are read straight from the machine repository; point
+# ANDROIDTESTER_ROOT at a checkout (default: ../AndroidTester, i.e. a
+# sibling directory). STLs are exported into this repo's cad/stl/ (the
+# machine repo is never written to). Part names carry an `at_` prefix so
+# their cached STLs and MJCF geoms never collide with the local
+# manifest.yaml parts.
+#
+# Same convention as manifest.yaml: imported meshes are VISUAL ONLY
+# (contype=0/conaffinity=0); collision stays on the primitives in
+# steropes/gantry.py. `offset_mm` placements are computed from the parts'
+# STL bounds so each mesh is co-located with the primitive it replaces
+# (finger tip end at the twin's tip, bracket flange inside the carriage):
+# the real machine's parts are larger than the twin's primitives (a
+# 100x60 plate over a 40x40 collision box), which is the point — the
+# visuals are the real machine; the collision model stays the twin's.
+
+openscad_dir: ${ANDROIDTESTER_ROOT}/cad/openscad
+shared_config: 00_config.scad   # the machine's single source of dimensions
+
+constants:
+  # Real-machine dimensions (docs/01-mechanical.md, 00_config.scad). Unlike
+  # manifest.yaml these are NOT pinned to steropes/gantry.py — the drift
+  # guard for this manifest (tests/test_androidtester_cad.py) checks the
+  # exported STL spans against these values instead.
+  toolhead_plate_mm: [100.0, 60.0, 6.0]    # gantry_carriage: PLATE_W/D, T
+  finger_tip_diameter_mm: 8.0              # 00_config: FINGER_TIP_D
+  finger_body_mm: [24.0, 16.0, 40.0]       # finger_module: BODY_W/D/H
+  toolcam_bracket_mm: [30.0, 30.0, 40.0]   # camera_mounts: w x w x (t + drop)
+
+parts:
+  at_toolhead_plate:
+    scad: gantry_carriage.scad
+    part: toolhead_plate
+    role: visual
+    body: toolhead
+    offset_mm: [-50.0, -30.0, -3.0]   # centres the 100x60x6 plate on the
+                                      # 40x40x20 carriage primitive
+    replaces: tool_carriage
+    color: [0.30, 0.32, 0.38]
+  at_finger_body:
+    scad: finger_module.scad
+    part: finger_body
+    role: visual
+    body: tool_finger_body
+    offset_mm: [-12.0, -8.0, -15.0]   # plunger axis (STL x=12, y=8) onto the
+                                      # primitive's axis; tip end (STL z=0)
+                                      # at the primitive's tip (z=-15)
+    replaces: tool_finger
+    color: [0.70, 0.70, 0.75]
+  at_toolcam_bracket:
+    scad: camera_mounts.scad
+    part: toolcam_bracket
+    role: visual
+    body: toolhead
+    offset_mm: [-27.0, -17.5, 24.0]   # camera shelf (STL z -35..-30) just
+                                      # above the twin's fixed toolcam
+                                      # (TOOLCAM_OFFSET_MM), keeping the
+                                      # camera's downward view clear; the
+                                      # flange rides above the carriage —
+                                      # the real machine's Z elevator puts
+                                      # the plate much higher than the twin's
+    color: [0.20, 0.45, 0.30]

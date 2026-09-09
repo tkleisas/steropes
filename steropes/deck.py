@@ -19,17 +19,17 @@ DECK_WIDTH_MM = 400.0
 DECK_DEPTH_MM = 300.0
 
 # ArUco fiducials: marker id -> (x, y) of the marker centre in deck mm.
-# DICT_4X4_50, ids 1-4, one marker-width in from each corner of a 300x300 mm
-# harness deck. This mirrors the host stack's defaults exactly
+# DICT_4X4_50, ids 1-4, one marker-width in from each corner of the
+# 400x300 mm deck. This mirrors the host stack's defaults exactly
 # (androidtester HarnessConfig.deck_marker_map(): DICT_4X4_50, marker_size_mm
-# 20, inset = marker_size_mm) so an unmodified client calibrates against
-# rendered frames with its stock configuration. The deck itself is larger
-# (400x300); the markers sit where the client's defaults expect them.
+# 20, inset = marker_size_mm from each corner of the 400x300 deck) so an
+# unmodified client calibrates against rendered frames with its stock
+# configuration.
 ARUCO_DICTIONARY = "DICT_4X4_50"
 DECK_MARKERS: dict[int, tuple[float, float]] = {
     1: (20.0, 20.0),
-    2: (280.0, 20.0),
-    3: (280.0, 280.0),
+    2: (380.0, 20.0),
+    3: (380.0, 280.0),
     4: (20.0, 280.0),
 }
 

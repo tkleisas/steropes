@@ -5,7 +5,11 @@ geometry in the physics scene, driven by ``cad/manifest.yaml``:
 
 1. The manifest maps part name -> scad file, ``PART`` selector, role,
    target MJCF body, and in-body offset (see the manifest header for the
-   format).
+   format). A manifest may also set ``openscad_dir`` (with a
+   ``${ANDROIDTESTER_ROOT}`` placeholder, default ``../AndroidTester``) to
+   source parts from the machine repository itself — see
+   ``cad/manifest.androidtester.yaml`` — and ``shared_config`` to name the
+   shared include the STL cache is invalidated against.
 2. :func:`export_part` / :func:`export_all` run the OpenSCAD CLI to
    produce one ASCII STL per part under ``cad/stl/`` (gitignored).
    Export is cached: a part is re-exported only when its scad source (or
@@ -52,8 +56,16 @@ ATTACHABLE_BODIES = ("toolhead", "tool_finger_body")
 VALID_ROLES = ("visual",)
 
 #: Shared include every part sources its dimensions from; a change here
-#: invalidates the STL cache for all parts.
+#: invalidates the STL cache for all parts. A manifest may override the
+#: filename with a top-level ``shared_config:`` field (the AndroidTester
+#: sources use ``00_config.scad``).
 SHARED_CONFIG = "cad_config.scad"
+
+#: Environment variable pointing at a checkout of the AndroidTester machine
+#: repository; manifests may reference it as ``${ANDROIDTESTER_ROOT}`` in
+#: their ``openscad_dir``. Defaults to a sibling checkout.
+AT_ROOT_ENV = "ANDROIDTESTER_ROOT"
+AT_ROOT_DEFAULT = "../AndroidTester"
 
 
 class ManifestError(ValueError):
@@ -84,6 +96,7 @@ class Manifest:
     stl_dir: Path                        # exported STLs (<manifest>/stl)
     constants: dict
     parts: tuple[CadPart, ...]
+    shared_config: str = SHARED_CONFIG   # shared include, for cache freshness
     _by_name: dict = field(repr=False, compare=False, default=None)
 
     def __post_init__(self) -> None:
@@ -123,6 +136,13 @@ def load_manifest(path: str | Path = DEFAULT_MANIFEST) -> Manifest:
         raise ManifestError(f"manifest not found: {path}")
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     cad_dir = path.parent / "openscad"
+    if raw.get("openscad_dir"):
+        cad_dir = _expand_openscad_dir(str(raw["openscad_dir"]), path)
+        if not cad_dir.is_dir():
+            raise ManifestError(
+                f"openscad_dir not found: {cad_dir} (set the "
+                f"{AT_ROOT_ENV} environment variable to the machine "
+                "repository checkout)")
     stl_dir = path.parent / "stl"
 
     parts = []
@@ -152,7 +172,24 @@ def load_manifest(path: str | Path = DEFAULT_MANIFEST) -> Manifest:
             replaces=spec.get("replaces")))
     return Manifest(path=path, cad_dir=cad_dir, stl_dir=stl_dir,
                     constants=dict(raw.get("constants") or {}),
-                    parts=tuple(parts))
+                    parts=tuple(parts),
+                    shared_config=str(raw.get("shared_config", SHARED_CONFIG)))
+
+
+def _expand_openscad_dir(value: str, manifest_path: Path) -> Path:
+    """Resolve a manifest's ``openscad_dir``.
+
+    ``${ANDROIDTESTER_ROOT}`` expands from the environment (default:
+    :data:`AT_ROOT_DEFAULT`); a relative result resolves against the
+    manifest's grandparent directory (the project root when the manifest
+    lives in ``cad/``), so ``../AndroidTester`` means the sibling checkout.
+    """
+    root = os.environ.get(AT_ROOT_ENV, AT_ROOT_DEFAULT)
+    expanded = value.replace("${" + AT_ROOT_ENV + "}", root)
+    p = Path(expanded)
+    if not p.is_absolute():
+        p = manifest_path.parent.parent / p
+    return p
 
 
 # --- export ------------------------------------------------------------------------
@@ -184,7 +221,7 @@ def _is_fresh(manifest: Manifest, part: CadPart) -> bool:
     if not stl.is_file():
         return False
     stl_mtime = stl.stat().st_mtime
-    sources = [manifest.scad_path(part), manifest.cad_dir / SHARED_CONFIG]
+    sources = [manifest.scad_path(part), manifest.cad_dir / manifest.shared_config]
     return all(stl_mtime >= src.stat().st_mtime
                for src in sources if src.is_file())
 

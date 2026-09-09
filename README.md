@@ -17,6 +17,12 @@ Steropes simulates a physical machine in a rigid-body physics engine with emulat
 cameras, so that control software, vision pipelines, and mechanical designs can be
 exercised **before the hardware exists** — and continuously in CI afterwards.
 
+The twin models the AndroidTester reference machine: a
+**400 × 300 mm deck** with four ArUco fiducials (DICT_4X4_50, ids 1–4, one
+marker-width — 20 mm — in from each corner: (20,20), (380,20), (380,280),
+(20,280) in deck mm), matching `androidtester.HarnessConfig`'s defaults so an
+unmodified client calibrates against rendered frames out of the box.
+
 The reference workload is a robotic harness that physically tests payment
 terminals (card insert/eject, magstripe swipe, contactless tap, scrambled
 on-screen PIN entry), but the toolkit is designed to be reusable for any small
@@ -114,7 +120,9 @@ Each milestone stands alone — if the project stalls, what's built is still use
   the rectified rendered screen). The same flow runs without the server:
   `python -m steropes.scenario scenarios/phone_wake_unlock.yaml`. Remaining
   for M4's second half: CI tier + drift guards against the reference
-  machine's CAD and firmware configuration.
+  machine's firmware configuration. (The CAD drift guard landed:
+  `cad/manifest.androidtester.yaml` imports the machine's real toolhead
+  parts — see [The CAD pipeline](#the-cad-pipeline).)
 
 ## The CAD pipeline
 
@@ -143,6 +151,31 @@ changes) and injects the meshes into the toolhead bodies.
 
 The OpenSCAD binary is found via the `OPENSCAD` environment variable,
 falling back to `C:\Program Files\OpenSCAD\openscad.com`.
+
+**The machine's real CAD.** `cad/manifest.androidtester.yaml` sources the
+toolhead parts straight from the AndroidTester machine repository —
+`gantry_carriage.scad` (`toolhead_plate`), `finger_module.scad`
+(`finger_body`), `camera_mounts.scad` (`toolcam_bracket`) — via a top-level
+`openscad_dir:` with a `${ANDROIDTESTER_ROOT}` placeholder (default
+`../AndroidTester`, i.e. a sibling checkout; set the env var to point
+elsewhere). STLs export into this repo's `cad/stl/` — the machine repo is
+never written to. Use it exactly like the local manifest:
+
+```sh
+ANDROIDTESTER_ROOT=/path/to/AndroidTester python - <<'EOF'
+from steropes.scene import DeckScene, load_profile
+scene = DeckScene(load_profile("profiles/countertop_pos_v1.yaml"),
+                  screen_shape=(240, 320), workdir="out/at_cad",
+                  cad_manifest="cad/manifest.androidtester.yaml")
+scene.move_toolhead(200.0, 150.0)
+import cv2; cv2.imwrite("out/at_cad/overhead.png", scene.render_overhead())
+EOF
+```
+
+The same drift guard applies in reverse: `tests/test_androidtester_cad.py`
+(gated on OpenSCAD + the checkout being present) asserts the exported STL
+spans match the machine's published dimensions, so a change on either side
+fails loudly.
 
 **Visual vs. collision.** Imported meshes are *visual only*
 (`contype="0" conaffinity="0"`). Collision stays on the simplified MJCF
@@ -177,7 +210,7 @@ screen taps with compliant finger, contact-derived registration, and
 per-tap force budget), and the first half of M4 (Moonraker-compatible
 HTTP server + Android-phone DUT; an unmodified Klipper-style host stack
 runs its wake→unlock scenario against the twin) are complete and covered
-by scenario tests; the package is importable and `pytest` is green (80
+by scenario tests; the package is importable and `pytest` is green (84
 tests). Everything past that is design scaffold — see the roadmap above.
 
 ## License
