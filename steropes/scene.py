@@ -32,6 +32,7 @@ import numpy as np
 import yaml
 
 from . import deck as deck_const
+from . import cadimport
 from . import gantry
 from . import touch
 
@@ -161,12 +162,19 @@ class DeckScene:
     The M3 finger is a compliant plunger on a Z slide joint;
     :meth:`tap_finger` physically taps the screen and reports the
     contact-derived keypad cell and peak force (:mod:`steropes.touch`).
+
+    ``cad_manifest`` (M0) optionally attaches imported OpenSCAD meshes to
+    the toolhead as visual-only geoms (:mod:`steropes.cadimport`);
+    collision stays on the primitives, so physics and every scenario are
+    unaffected. Primitive geoms a part ``replaces`` are hidden (alpha 0)
+    so the visuals do not double up.
     """
 
     def __init__(self, profile: TerminalProfile,
                  screen_shape: tuple[int, int],
                  workdir: str | Path,
-                 camera: deck_const.OverheadCamera = deck_const.OVERHEAD_CAMERA
+                 camera: deck_const.OverheadCamera = deck_const.OVERHEAD_CAMERA,
+                 cad_manifest: str | Path | None = None
                  ) -> None:
         """``screen_shape`` is (height, width) of the screen framebuffer."""
         self.profile = profile
@@ -175,10 +183,28 @@ class DeckScene:
         self._workdir.mkdir(parents=True, exist_ok=True)
         (self._workdir / "flat_quad.obj").write_text(QUAD_OBJ, encoding="utf-8")
 
+        # M0 CAD import: export (cached) the manifest's STLs and prepare
+        # the MJCF fragments before the model is built.
+        self._cad: cadimport.Manifest | None = None
+        self._cad_frag: cadimport.SceneFragments | None = None
+        if cad_manifest is not None:
+            self._cad = cadimport.load_manifest(cad_manifest)
+            stls = cadimport.export_all(self._cad)
+            self._cad_frag = cadimport.scene_fragments(self._cad, stls)
+
         xml = self._build_xml(screen_shape)
         self.model = mujoco.MjModel.from_xml_string(xml)
         self.data = mujoco.MjData(self.model)
         mujoco.mj_forward(self.model, self.data)
+
+        # Hide the primitives visually doubled up by imported meshes.
+        # rgba alpha only — contype/conaffinity are untouched, so the
+        # collision model is identical with or without CAD attached.
+        if self._cad_frag is not None:
+            for name in self._cad_frag.hides:
+                gid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM,
+                                        name)
+                self.model.geom_rgba[gid, 3] = 0.0
 
         self._tex_ids = [
             self._write_texture("screen", np.zeros(screen_shape, np.uint8))]
@@ -263,6 +289,15 @@ class DeckScene:
         deck_w, deck_d = deck_const.DECK_WIDTH_MM, deck_const.DECK_DEPTH_MM
         tile_m = deck_const.MARKER_TILE_MM / 2000.0
 
+        # M0 CAD meshes (optional): visual-only geoms on the toolhead.
+        cad_assets, cad_toolhead, cad_finger = "", "", ""
+        if self._cad_frag is not None:
+            cad_assets = self._cad_frag.assets
+            cad_toolhead = self._cad_frag.body_geoms["toolhead"]
+            cad_finger = self._cad_frag.body_geoms["tool_finger_body"]
+        toolhead = gantry.toolhead_xml(extra_carriage_geoms=cad_toolhead,
+                                       extra_finger_geoms=cad_finger)
+
         marker_assets = "\n".join(
             f'    <texture name="marker_{mid}" type="2d" builtin="flat"'
             f' rgb1="1 1 1" width="{deck_const.MARKER_TEX_PX}"'
@@ -288,6 +323,7 @@ class DeckScene:
           scale="{tile_m:.5f} {tile_m:.5f} 1"/>
     <mesh name="screen_quad" file="{quad_path}" inertia="shell"
           scale="{shx / 1000:.5f} {shy / 1000:.5f} 1"/>
+{cad_assets}
   </asset>
   <worldbody>
     <geom name="deck" type="box"
@@ -310,7 +346,7 @@ class DeckScene:
 {riser_geom}
 {pad_geoms}
 {marker_geoms}
-{gantry.toolhead_xml()}
+{toolhead}
     <camera name="overhead"
             pos="{deck_w / 2000:.4f} {deck_d / 2000:.4f} {cam.height_mm / 1000:.3f}"
             xyaxes="1 0 0 0 1 0" fovy="{cam.fovy_deg:.4f}"/>

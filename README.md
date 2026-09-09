@@ -68,8 +68,16 @@ YAML step vocabulary and `profiles/` for the terminal profile format.
 
 Each milestone stands alone — if the project stalls, what's built is still useful.
 
-- **M0 — Reference machine CAD.** `$part`-selectable per-part STL export from
-  OpenSCAD sources: the geometry import pipeline for the reference gantry machine.
+- **M0 — Reference machine CAD. DONE.** `$part`-selectable per-part STL
+  export from OpenSCAD sources: the geometry import pipeline for the
+  reference gantry machine. Parts in `cad/openscad/` (carriage plate,
+  finger body, toolcam bracket, driven by a shared `cad_config.scad`)
+  are exported via the OpenSCAD CLI to `cad/stl/` (cached, gitignored)
+  and attached to the toolhead as visual-only geoms — collision stays on
+  the MJCF primitives, so scenarios behave identically with or without
+  the CAD meshes. A drift guard pins the manifest constants to the
+  gantry collision constants. See [The CAD pipeline](#the-cad-pipeline)
+  below.
 - **M1 — Static scene + cameras. DONE.** Deck, terminal, ArUco markers, animated
   screen texture; overhead camera frames through the real vision pipeline, incl.
   OCR of a rendered scrambled PIN keypad. Proof:
@@ -108,6 +116,50 @@ Each milestone stands alone — if the project stalls, what's built is still use
   for M4's second half: CI tier + drift guards against the reference
   machine's CAD and firmware configuration.
 
+## The CAD pipeline
+
+Machine parts are authored as parametric OpenSCAD files in
+`cad/openscad/`, with shared dimensions in `cad_config.scad`. Each file
+declares a `PART = "preview";` selector near the top and a guarded
+export branch at the bottom:
+
+```scad
+include <cad_config.scad>
+PART = "preview";
+
+module my_part() { /* ... */ }
+
+if (PART == "preview" || PART == "my_part")
+    my_part();
+```
+
+`cad/manifest.yaml` maps each part to its scad file, `PART` selector,
+role, target MJCF body, in-body offset, and colour. To add a part: write
+the `.scad` file, add a `parts:` entry to the manifest, and pass
+`cad_manifest="cad/manifest.yaml"` to `DeckScene` —
+`steropes.cadimport` exports a binary STL per part to `cad/stl/`
+(gitignored; re-exported only when the source or `cad_config.scad`
+changes) and injects the meshes into the toolhead bodies.
+
+The OpenSCAD binary is found via the `OPENSCAD` environment variable,
+falling back to `C:\Program Files\OpenSCAD\openscad.com`.
+
+**Visual vs. collision.** Imported meshes are *visual only*
+(`contype="0" conaffinity="0"`). Collision stays on the simplified MJCF
+primitives authored in `steropes/gantry.py` — so contact behaviour, the
+collision guard, and every scenario are identical whether or not the CAD
+meshes are attached. A part's `replaces:` field names the primitive geom
+it visually doubles up; the scene hides that primitive (alpha 0) without
+touching its collision flags. Only `role: visual` exists; collision
+meshes are deliberately unsupported.
+
+**Drift guard.** `constants:` in the manifest mirrors both
+`cad_config.scad` and the collision dimensions in `steropes/gantry.py`
+(carriage footprint, finger tip diameter, finger/toolcam offsets).
+`tests/test_cadimport.py` asserts all three agree, and that the scene
+reads mesh placement from the manifest — change a dimension in one place
+and the tests tell you about the others.
+
 ## Reality gap — an honest note
 
 A physics sim is **design validation, not hardware validation**. Friction
@@ -118,14 +170,15 @@ scope by design.
 
 ## Status
 
-Pre-alpha. M1 (static scene + cameras + vision loop), M2 (kinematic
-gantry + collision guard), M3 (physical screen taps with compliant
-finger, contact-derived registration, and per-tap force budget), and the
-first half of M4 (Moonraker-compatible HTTP server + Android-phone DUT;
-an unmodified Klipper-style host stack runs its wake→unlock scenario
-against the twin) are complete and covered by scenario tests; the package
-is importable and `pytest` is green. Everything past that is design
-scaffold — see the roadmap above.
+Pre-alpha. M0 (OpenSCAD → STL → visual-only MJCF mesh pipeline, manifest-
+driven with a CAD/collision drift guard), M1 (static scene + cameras +
+vision loop), M2 (kinematic gantry + collision guard), M3 (physical
+screen taps with compliant finger, contact-derived registration, and
+per-tap force budget), and the first half of M4 (Moonraker-compatible
+HTTP server + Android-phone DUT; an unmodified Klipper-style host stack
+runs its wake→unlock scenario against the twin) are complete and covered
+by scenario tests; the package is importable and `pytest` is green (80
+tests). Everything past that is design scaffold — see the roadmap above.
 
 ## License
 

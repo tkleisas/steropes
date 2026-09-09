@@ -93,13 +93,18 @@ def interpolate(start: tuple[float, float], goal: tuple[float, float],
 
 # --- MJCF ----------------------------------------------------------------------------
 
-def toolhead_xml() -> str:
+def toolhead_xml(extra_carriage_geoms: str = "",
+                 extra_finger_geoms: str = "") -> str:
     """MJCF fragment: toolhead body with X/Y slide joints, finger, toolcam.
 
     The finger is a separate plunger body on a Z slide joint (``tool_z``,
     positive = down) with spring-damper compliance — a pogo-pin stand-in.
     Its joint spring reference is what a tap actuates; see
     :meth:`steropes.scene.DeckScene.tap_finger`.
+
+    ``extra_carriage_geoms`` / ``extra_finger_geoms`` inject additional
+    (visual-only) geoms into the carriage and finger bodies — the M0 CAD
+    import (:mod:`steropes.cadimport`) attaches imported meshes this way.
     """
     chx, chy, chz = CARRIAGE_HALF_MM
     fx, fy, fz = FINGER_OFFSET_MM
@@ -113,6 +118,7 @@ def toolhead_xml() -> str:
       <geom name="tool_carriage" type="box"
             size="{chx / 1000:.4f} {chy / 1000:.4f} {chz / 1000:.4f}"
             rgba="0.75 0.45 0.15 1"/>
+{extra_carriage_geoms}
       <camera name="toolcam"
               pos="{cx / 1000:.4f} {cy / 1000:.4f} {cz / 1000:.4f}"
               xyaxes="1 0 0 0 1 0" fovy="{TOOL_CAMERA.fovy_deg:.4f}"/>
@@ -123,6 +129,7 @@ def toolhead_xml() -> str:
         <geom name="tool_finger" type="cylinder"
               size="{FINGER_RADIUS_MM / 1000:.4f} {FINGER_HALF_LEN_MM / 1000:.4f}"
               density="{touch.FINGER_DENSITY_KG_M3}" rgba="0.85 0.85 0.88 1"/>
+{extra_finger_geoms}
       </body>
     </body>
 """

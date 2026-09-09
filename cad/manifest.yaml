@@ -1,0 +1,44 @@
+# cad/manifest.yaml — OpenSCAD parts -> per-part STL -> MJCF visual geoms.
+#
+# Convention: imported meshes are VISUAL ONLY (attached with
+# contype=0/conaffinity=0). Collision stays on the simplified primitives
+# in steropes/gantry.py; a part's `replaces:` field names the primitive
+# geom it visually doubles up, which the scene then hides (alpha 0) —
+# its collision behaviour is unchanged.
+#
+# `constants:` mirrors cad/openscad/cad_config.scad and the collision
+# dimensions in steropes/gantry.py. The drift guard in
+# tests/test_cadimport.py fails if any of the three diverge — edit all
+# three together (or better: change gantry.py, then re-derive the rest).
+
+constants:
+  carriage_footprint_mm: [40.0, 40.0]   # 2 * gantry.CARRIAGE_HALF_MM[:2]
+  finger_tip_diameter_mm: 8.0           # 2 * gantry.FINGER_RADIUS_MM
+  finger_offset_mm: [12.0, 0.0, -25.0]  # gantry.FINGER_OFFSET_MM
+  toolcam_offset_mm: [-12.0, 0.0, -11.0]  # gantry.TOOLCAM_OFFSET_MM
+
+parts:
+  carriage_plate:
+    scad: carriage_plate.scad       # relative to cad/openscad/
+    part: carriage_plate            # PART selector passed with -D
+    role: visual                    # only "visual" is supported; collision
+                                    # stays on primitives (see header)
+    body: toolhead                  # MJCF body the mesh geom attaches to
+    offset_mm: [0.0, 0.0, 0.0]      # geom position within that body
+    replaces: tool_carriage         # primitive geom hidden once attached
+    color: [0.30, 0.32, 0.38]
+  finger_body:
+    scad: finger_body.scad
+    part: finger_body
+    role: visual
+    body: tool_finger_body
+    offset_mm: [0.0, 0.0, 0.0]
+    replaces: tool_finger
+    color: [0.70, 0.70, 0.75]
+  toolcam_bracket:
+    scad: toolcam_bracket.scad
+    part: toolcam_bracket
+    role: visual
+    body: toolhead
+    offset_mm: [-12.0, 0.0, -11.0]  # == constants.toolcam_offset_mm
+    color: [0.20, 0.45, 0.30]
