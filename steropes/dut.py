@@ -99,8 +99,12 @@ class DeviceUnderTest:
         return self.submit()
 
     def render_for_deck(self) -> np.ndarray:
-        """Screen canvas as the deck texture needs it (identity for the POS:
-        its profile polygon puts top-left at the deck +Y edge)."""
+        """Screen canvas in the pipeline's deck convention (identity for the
+        POS: its profile polygon puts top-left at the deck +Y edge, which is
+        already the physical orientation). See :meth:`PhoneDUT
+        .render_for_deck` in :mod:`steropes.phone` for the convention; the 3D
+        scene textures the quad with :meth:`render_screen` and derives the
+        pipeline canvas in ``DeckScene._pipeline_canvas``."""
         return self.render_screen()
 
     # -- rendering --------------------------------------------------------------

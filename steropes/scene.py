@@ -17,8 +17,12 @@ homography), but a fixed convention keeps saved frames directly comparable
 across runs.
 
 Texture updates: the DUT screen is a model texture whose pixels are rewritten
-(:meth:`DeckScene.set_screen`) and re-uploaded to the GL context whenever the
-screen redraws.
+(:meth:`DeckScene.set_screen`) and re-uploaded to the GL contexts whenever the
+screen redraws. The model texture holds the PHYSICAL screen (upright and
+unmirrored for a human at the deck — what the interactive viewer shows); the
+offscreen overhead/toolcam contexts receive the compensating deck-convention
+flip inside :meth:`DeckScene._upload_textures`, so pipeline frames keep the
+exact byte layout the host stack's vision was built against.
 """
 from __future__ import annotations
 
@@ -216,6 +220,20 @@ class DeckScene:
             self._tex_ids.append(self._write_texture(
                 f"marker_{mid}", marker_tile(mid), rot180=True))
 
+        # Physical-vs-pipeline screen orientation: the quad maps texture
+        # row 0 to the deck +Y edge and column 0 to -X, so the physical
+        # canvas (upright UI) is exactly render_screen(). The pipeline's
+        # deck convention (profile polygon corners TL TR BR BL) is mirrored
+        # when the polygon runs the UI's +fy (top->bottom) along deck +Y —
+        # then the pipeline canvas is the physical one v-flipped, exactly
+        # what render_for_deck() has always produced. H-flip covers the
+        # (unused) mirror image of that convention.
+        poly = self.profile.screen_polygon_mm
+        tl, tr, bl = poly[0], poly[1], poly[3]
+        self._screen_pipeline_vflip = bl[1] > tl[1]
+        self._screen_pipeline_hflip = tr[0] < tl[0]
+        self._screen_bgr = np.zeros((*screen_shape, 3), np.uint8)
+
         self._renderer = mujoco.Renderer(
             self.model, height=camera.height_px, width=camera.width_px)
         self._tool_renderer: mujoco.Renderer | None = None  # lazy, see render_toolcam
@@ -405,17 +423,71 @@ class DeckScene:
         self.model.tex_data[adr:adr + w * h * 3] = rgb.reshape(-1)
         return tex_id
 
+    def _pipeline_canvas(self, canvas_bgr: np.ndarray) -> np.ndarray:
+        """Deck-convention screen canvas for the pipeline (compensating flip).
+
+        ``canvas_bgr`` is the PHYSICAL screen (upright and unmirrored in 3D,
+        i.e. :meth:`DeviceUnderTest.render_screen`). The offscreen renderers
+        feed the host stack's vision, which was built against the mirrored
+        deck convention — this is the transform that reproduces those exact
+        bytes. Identity for profiles whose polygon is already physical
+        (e.g. the POS terminal); a vertical flip for the phone profile.
+        """
+        out = canvas_bgr
+        if self._screen_pipeline_vflip:
+            out = np.flipud(out)
+        if self._screen_pipeline_hflip:
+            out = np.fliplr(out)
+        return out
+
     def _upload_textures(self) -> None:
-        # NOTE: uses the Renderer's private mjrContext; there is no public handle.
-        contexts = [self._renderer._mjr_context]
+        """Upload marker + screen textures to the offscreen GL contexts.
+
+        Two subtleties:
+
+        - ``mjr_uploadTexture`` writes into whichever GL context is CURRENT
+          on this thread, so each renderer's own context is made current
+          before its copy is uploaded (without this, uploads after a second
+          renderer appears silently land in the wrong context and the
+          overhead frames keep a stale screen).
+        - The offscreen contexts are the pipeline's read-out path: they get
+          the deck-convention screen canvas (:meth:`_pipeline_canvas`), while
+          ``model.tex_data`` keeps the physical canvas — the interactive
+          viewer uploads that to its own context via ``update_texture``.
+        """
+        # NOTE: uses the Renderer's private members; there is no public handle.
+        renderers = [self._renderer]
         if self._tool_renderer is not None:
-            contexts.append(self._tool_renderer._mjr_context)
-        for tex_id in self._tex_ids:
-            for ctx in contexts:
-                mujoco.mjr_uploadTexture(self.model, ctx, tex_id)
+            renderers.append(self._tool_renderer)
+        tex_id = self._tex_ids[0]  # screen
+        w, h = self.model.tex_width[tex_id], self.model.tex_height[tex_id]
+        adr, n = self.model.tex_adr[tex_id], w * h * 3
+        physical = None
+        if (self._screen_pipeline_vflip or self._screen_pipeline_hflip):
+            physical = self.model.tex_data[adr:adr + n].copy()
+            pipeline = self._pipeline_canvas(self._screen_bgr)
+            self.model.tex_data[adr:adr + n] = pipeline[:, :, ::-1].reshape(-1)
+        try:
+            for renderer in renderers:
+                if renderer._gl_context is not None:
+                    renderer._gl_context.make_current()
+                for tid in self._tex_ids:
+                    mujoco.mjr_uploadTexture(self.model,
+                                             renderer._mjr_context, tid)
+        finally:
+            if physical is not None:
+                self.model.tex_data[adr:adr + n] = physical
 
     def set_screen(self, canvas_bgr: np.ndarray) -> None:
-        """Replace the DUT screen texture and re-upload it to the GL context."""
+        """Replace the DUT screen texture with the PHYSICAL screen canvas.
+
+        ``canvas_bgr`` is upright and unmirrored in 3D
+        (:meth:`DeviceUnderTest.render_screen`): a human at the deck reads
+        it correctly. The offscreen pipeline renderers receive the
+        compensating deck-convention flip inside :meth:`_upload_textures`,
+        so overhead/toolcam frames are unchanged by this convention.
+        """
+        self._screen_bgr = canvas_bgr
         self._write_texture("screen", canvas_bgr)
         self._upload_textures()
 

@@ -123,7 +123,9 @@ def overview_camera(cam) -> None:
     cam.lookat[:] = (deck_const.DECK_WIDTH_MM / 2000.0,
                      deck_const.DECK_DEPTH_MM / 2000.0, 0.0)
     cam.distance = 0.55
-    cam.azimuth = 90.0    # screen-up is deck +Y, matching the overhead frame
+    cam.azimuth = 90.0    # screen-up is deck +Y, matching the overhead frame;
+                          # also the phone's natural reading side (the screen
+                          # texture is physical: upright from here)
     cam.elevation = -55.0  # slight perspective; the deck reads as a 3D object
 
 
@@ -147,10 +149,13 @@ def run_viewer_loop(viewer, lock: threading.Lock, *, step=None,
             step()
         with lock:
             viewer.sync()
-        if (screen_changed is not None and screen_tex_id is not None
-                and screen_changed.is_set()):
-            screen_changed.clear()
-            viewer.update_texture(screen_tex_id)
+            if (screen_changed is not None and screen_tex_id is not None
+                    and screen_changed.is_set()):
+                screen_changed.clear()
+                # update_texture reads model.tex_data, which the scene's
+                # upload path briefly rewrites (pipeline flip) — stay under
+                # the lock so the viewer never uploads that transient state.
+                viewer.update_texture(screen_tex_id)
         time.sleep(poll_s)
     viewer.close()
 
@@ -238,7 +243,7 @@ def _run_scenario(args: argparse.Namespace) -> int:
 def _run_interactive(args: argparse.Namespace) -> int:
     profile = load_profile(args.profile)
     dut = build_dut(profile, args.seed)
-    screen = dut.render_for_deck()
+    screen = dut.render_screen()
     scene = DeckScene(profile, screen_shape=screen.shape[:2],
                       workdir=args.workdir)
     scene.set_screen(screen)

@@ -199,12 +199,17 @@ class PhoneDUT:
         return img
 
     def render_for_deck(self) -> np.ndarray:
-        """Screen canvas as the deck texture needs it (vertically flipped).
+        """Screen canvas in the pipeline's deck convention (vertically flipped).
 
         The deck texture maps canvas row 0 to the screen's +Y edge, but the
         shared device profile puts the UI's top-left at the (min x, min y)
-        deck corner — so the UI is flipped vertically for the texture and
-        comes back upright through the client's rectification.
+        deck corner — so the pipeline canvas is flipped vertically and comes
+        back upright through the client's rectification. This convention is
+        mirrored (non-physical); the 3D scene therefore textures the quad
+        with :meth:`render_screen` and derives this canvas for the offscreen
+        pipeline renderers in ``DeckScene._pipeline_canvas``
+        (:mod:`steropes.scene`). Kept as the explicit definition of the
+        pipeline contract; the golden-frame tests assert the two agree.
         """
         return np.flipud(self.render_screen())
 

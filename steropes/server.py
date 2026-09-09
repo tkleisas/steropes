@@ -137,7 +137,7 @@ class TwinMachine:
         try:
             self.profile: TerminalProfile = load_profile(profile_path)
             self.dut: DeviceUnderTest | PhoneDUT = build_dut(self.profile, seed)
-            screen = self.dut.render_for_deck()
+            screen = self.dut.render_screen()
             self.scene = DeckScene(self.profile,
                                    screen_shape=screen.shape[:2],
                                    workdir=workdir)
@@ -363,7 +363,7 @@ class TwinMachine:
         self._refresh_screen()
 
     def _refresh_screen(self) -> None:
-        self.scene.set_screen(self.dut.render_for_deck())
+        self.scene.set_screen(self.dut.render_screen())
         self.screen_changed.set()  # an in-process viewer re-uploads the texture
 
 

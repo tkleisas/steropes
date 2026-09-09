@@ -177,7 +177,7 @@ class ScenarioRunner:
 
     def _step_render(self, ctx: _Context, save: str | None = None,
                      camera: str = "overhead") -> str:
-        ctx.scene.set_screen(ctx.dut.render_for_deck())
+        ctx.scene.set_screen(ctx.dut.render_screen())
         if camera == "overhead":
             ctx.frame = ctx.scene.render_overhead()
             ctx.rectified = None
