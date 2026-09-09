@@ -33,6 +33,7 @@ import cv2
 import yaml
 
 from . import deck as deck_const
+from . import touch
 from . import vision
 from .dut import DeviceUnderTest
 from .scene import DeckScene, TerminalProfile, load_profile
@@ -72,6 +73,7 @@ class _Context:
         self.rectified = None
         self.readings = None
         self.plan = None
+        self.taps: list = []
 
 
 def _need(value, what: str):
@@ -133,7 +135,7 @@ class ScenarioRunner:
 
     def _dispatch(self, step: dict, ctx: _Context) -> str:
         action = step["action"]
-        handler = getattr(self, f"_step_{action}", None)
+        handler = getattr(self, f"_step_{action.replace('.', '_')}", None)
         if handler is None:
             raise StepFailure(f"unknown action {action!r}")
         params = {k: v for k, v in step.items() if k != "action"}
@@ -234,8 +236,8 @@ class ScenarioRunner:
         return f"{len(plan)} taps"
 
     def _step_enter_pin(self, ctx: _Context) -> str:
-        # M1 fidelity: the tap is a direct model call. Physical contact
-        # (toolhead pressing the on-screen key) is a later milestone (M3).
+        # M1 fast tier: the tap is a direct model call. The physical tier
+        # (finger pressing the on-screen key) is enter_pin_physical (M3).
         plan = _need(ctx.plan, "enter_pin (plan_taps first)")
         state = ctx.dut.enter_pin(list(plan))
         return f"dut state: {state}"
@@ -281,6 +283,67 @@ class ScenarioRunner:
             raise StepFailure("expected toolhead contact, none detected "
                               "(collision guard may be vacuous)")
         return f"contact: {pairs}"
+
+    # -- touch steps (M3) -----------------------------------------------------
+
+    def _route_tap(self, ctx: _Context, outcome) -> None:
+        """Feed a contact-derived cell to the DUT; misses never reach it."""
+        if outcome.cell is not None:
+            ctx.dut.tap(outcome.cell)
+
+    def _step_touch_tap(self, ctx: _Context, x: float, y: float,
+                        descend_mm: float | None = None,
+                        stiffness: float | None = None,
+                        damping: float | None = None) -> str:
+        kwargs = {k: float(v) for k, v in
+                  {"descend_mm": descend_mm, "stiffness": stiffness,
+                   "damping": damping}.items() if v is not None}
+        outcome = ctx.scene.tap_finger(float(x), float(y), **kwargs)
+        ctx.taps.append(outcome)
+        self._route_tap(ctx, outcome)
+        if outcome.cell is None:
+            return f"miss (hit {outcome.geom}, {outcome.peak_force_n:.2f} N)"
+        return (f"cell {outcome.cell} at {outcome.contact_mm}, "
+                f"{outcome.peak_force_n:.2f} N")
+
+    def _step_enter_pin_physical(self, ctx: _Context) -> str:
+        # M3 fidelity: each planned cell is tapped by the physical finger;
+        # the DUT receives whatever cell the contact point lands in.
+        plan = _need(ctx.plan, "enter_pin_physical (plan_taps first)")
+        poly = self.profile.screen_polygon_mm
+        cols, rows = self.profile.keypad_cols, self.profile.keypad_rows
+        for cell in plan:
+            cx, cy = touch.cell_center(poly, cols, rows, cell)
+            outcome = ctx.scene.tap_finger(cx, cy)
+            ctx.taps.append(outcome)
+            self._route_tap(ctx, outcome)
+        state = ctx.dut.submit()
+        peak = max(t.peak_force_n for t in ctx.taps[-len(plan):])
+        return f"dut state: {state} (peak {peak:.2f} N over {len(plan)} taps)"
+
+    def _step_expect_tap_registered(self, ctx: _Context,
+                                    cell: int | None = None) -> str:
+        if not ctx.taps:
+            raise StepFailure("expect_tap_registered: no taps recorded "
+                              "(touch.tap or enter_pin_physical first)")
+        want = None if cell is None else int(cell)
+        got = ctx.taps[-1].cell
+        if got != want:
+            raise StepFailure(f"last tap registered cell {got}, "
+                              f"expected {want}")
+        return f"registered cell {got}"
+
+    def _step_expect_max_tap_force_below(self, ctx: _Context, n: float) -> str:
+        if not ctx.taps:
+            raise StepFailure("expect_max_tap_force_below: no taps recorded "
+                              "(touch.tap or enter_pin_physical first)")
+        peak = max(t.peak_force_n for t in ctx.taps)
+        if peak <= 0.0:
+            raise StepFailure("no contact force recorded — the taps never "
+                              "touched anything (vacuous force check)")
+        if peak >= float(n):
+            raise StepFailure(f"peak tap force {peak:.2f} N >= {n} N")
+        return f"peak {peak:.2f} N < {n} N"
 
 
 def main(argv: list[str] | None = None) -> int:

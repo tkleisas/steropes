@@ -20,6 +20,7 @@ screen redraws.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +31,7 @@ import yaml
 
 from . import deck as deck_const
 from . import gantry
+from . import touch
 
 # Flat quad mesh (2x2 m, UV-mapped) used for markers and the screen; MuJoCo's
 # built-in box texture mapping does not span a face, so UVs are explicit.
@@ -108,6 +110,9 @@ class DeckScene:
     Carries the kinematic M2 gantry: the toolhead moves in deck XY via two
     slide joints (:meth:`move_toolhead`), and contacts between the toolhead
     geoms and the scene are recorded on every move (:attr:`collision_pairs`).
+    The M3 finger is a compliant plunger on a Z slide joint;
+    :meth:`tap_finger` physically taps the screen and reports the
+    contact-derived keypad cell and peak force (:mod:`steropes.touch`).
     """
 
     def __init__(self, profile: TerminalProfile,
@@ -145,6 +150,14 @@ class DeckScene:
         self._qy = self.model.jnt_qposadr[
             mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "tool_y")]
         self._move_contacts: list[tuple[str, str]] = []
+
+        # Compliant finger (M3): Z slide joint, driven via its spring
+        # reference during taps (see tap_finger).
+        self._jz_joint = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_JOINT, "tool_z")
+        self._qz = self.model.jnt_qposadr[self._jz_joint]
+        self._finger_geom = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "tool_finger")
 
     # -- MJCF -----------------------------------------------------------------
 
@@ -219,6 +232,12 @@ class DeckScene:
     <geom name="screen" type="mesh" mesh="screen_quad"
           pos="{scx / 1000:.4f} {scy / 1000:.4f} {scz / 1000:.5f}"
           material="screen" contype="0" conaffinity="0"/>
+    <geom name="screen_surface" type="box"
+          size="{shx / 1000:.4f} {shy / 1000:.4f} 0.0005"
+          pos="{scx / 1000:.4f} {scy / 1000:.4f} {(scz - 0.5) / 1000:.5f}"
+          rgba="0 0 0 0"/>
+    <!-- screen_surface: invisible contact skin for the flat (zero-volume,
+         non-collidable) visual quad; its top face is the tap target. -->
     <geom name="terminal_riser" type="box"
           size="{bhx / 1000:.4f} {riser_hy / 1000:.4f} {riser_h / 2000:.4f}"
           pos="{bcx / 1000:.4f} {riser_cy / 1000:.4f} {riser_h / 2000:.4f}"
@@ -333,6 +352,113 @@ class DeckScene:
             self.data.qpos[self._qy] = py / 1000.0
             mujoco.mj_forward(self.model, self.data)
             self._move_contacts.extend(self._toolhead_contacts())
+
+    # -- touch (M3) -------------------------------------------------------------
+
+    def tap_finger(self, x: float, y: float,
+                   descend_mm: float = touch.DEFAULT_DESCEND_MM,
+                   stiffness: float | None = None,
+                   damping: float | None = None) -> touch.TapOutcome:
+        """Physically tap deck point (x, y) mm with the compliant finger.
+
+        Moves the toolhead so the finger tip is over (x, y), then ramps the
+        Z joint's spring reference down at a fixed speed — the spring presses
+        the tip into whatever it finds, like a pogo-pin plunger. Contact
+        point and peak normal force are read from the physics engine
+        (``contact.pos`` / ``mj_contactForce``) at the peak-force contact;
+        the keypad cell is derived from that contact point, never from the
+        commanded (x, y). Deterministic: fixed model dt, fixed step counts.
+        ``stiffness``/``damping`` temporarily override the joint compliance
+        (N/m, N·s/m) and are restored afterwards.
+        """
+        jnt = self._jz_joint
+        dof = self.model.jnt_dofadr[jnt]  # joint damping lives per-DOF
+        k0 = float(self.model.jnt_stiffness[jnt])
+        c0 = float(self.model.dof_damping[dof])
+        if stiffness is not None:
+            self.model.jnt_stiffness[jnt] = stiffness
+        if damping is not None:
+            self.model.dof_damping[dof] = damping
+        try:
+            fx, fy = gantry.FINGER_OFFSET_MM[0], gantry.FINGER_OFFSET_MM[1]
+            self.move_toolhead(x - fx, y - fy)
+            self._tap_peak: dict = {"force": 0.0, "pos": None, "geom": None}
+            ref = descend_mm / 1000.0
+            self._ramp_finger(ref)                 # descend
+            self._hold_finger(touch.TAP_HOLD_S)    # settle at overtravel
+            outcome = self._tap_outcome((x, y))
+            self._ramp_finger(0.0, track=False)    # retract
+            self._hold_finger(touch.TAP_SETTLE_S, track=False)
+        finally:
+            self.model.jnt_stiffness[jnt] = k0
+            self.model.dof_damping[dof] = c0
+            self.model.qpos_spring[self._qz] = 0.0
+        # Re-anchor the plunger at cruise so every tap starts identically.
+        self.data.qpos[self._qz] = 0.0
+        self.data.qvel[dof] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+        return outcome
+
+    def _ramp_finger(self, ref_to: float, track: bool = True) -> None:
+        """Ramp the finger joint's spring reference at a fixed speed."""
+        dt = self.model.opt.timestep
+        ref_from = float(self.model.qpos_spring[self._qz])
+        n = max(1, math.ceil(abs(ref_to - ref_from)
+                             / (touch.TAP_SPEED_MM_S / 1000.0 * dt)))
+        for i in range(1, n + 1):
+            self.model.qpos_spring[self._qz] = (
+                ref_from + (ref_to - ref_from) * i / n)
+            mujoco.mj_step(self.model, self.data)
+            if track:
+                self._track_tap_peak()
+
+    def _hold_finger(self, seconds: float, track: bool = True) -> None:
+        """Step the dynamics in place for ``seconds`` (fixed dt)."""
+        n = max(1, round(seconds / self.model.opt.timestep))
+        for _ in range(n):
+            mujoco.mj_step(self.model, self.data)
+            if track:
+                self._track_tap_peak()
+
+    def _track_tap_peak(self) -> None:
+        """Update the tap's peak-force record from the current contacts.
+
+        The force budget is for the *total* applied force, so normal forces
+        are summed over all active finger contacts (the tip face touches as
+        several contact points that share the load); position and geom are
+        taken from the strongest single contact at the peak step.
+        """
+        force = np.zeros(6)
+        total = 0.0
+        strongest = (-1.0, None, None)  # (normal, pos, geom) of top contact
+        for i in range(self.data.ncon):
+            con = self.data.contact[i]
+            if self._finger_geom not in (con.geom1, con.geom2):
+                continue
+            mujoco.mj_contactForce(self.model, self.data, i, force)
+            normal = float(force[0])
+            total += normal
+            if normal > strongest[0]:
+                other = con.geom1 if con.geom2 == self._finger_geom else con.geom2
+                strongest = (normal,
+                             (float(con.pos[0]) * 1000.0,
+                              float(con.pos[1]) * 1000.0),
+                             mujoco.mj_id2name(
+                                 self.model, mujoco.mjtObj.mjOBJ_GEOM, other))
+        if total > self._tap_peak["force"]:
+            self._tap_peak = {"force": total, "pos": strongest[1],
+                              "geom": strongest[2]}
+
+    def _tap_outcome(self, target: tuple[float, float]) -> touch.TapOutcome:
+        """Build the TapOutcome from the peak-force finger contact."""
+        pos, geom = self._tap_peak["pos"], self._tap_peak["geom"]
+        cell = None
+        if geom == "screen_surface" and pos is not None:
+            cell = touch.cell_at(self.profile.screen_polygon_mm,
+                                 self.profile.keypad_cols,
+                                 self.profile.keypad_rows, *pos)
+        return touch.TapOutcome(target_mm=target, contact_mm=pos, geom=geom,
+                                cell=cell, peak_force_n=self._tap_peak["force"])
 
     def close(self) -> None:
         self._renderer.close()

@@ -5,8 +5,9 @@ fixed dt with no dynamics, and collision checking reduces to contact
 detection between the toolhead geoms and the scene (MuJoCo computes the
 contacts; nothing is asserted by the check itself).
 
-The toolhead carries a finger tool (taps the DUT screen; actuation is M3)
-and a downward camera mounted beside the finger, so toolcam frames render
+The toolhead carries a compliant finger tool (taps the DUT screen; Z
+actuation and contact physics are M3, see :mod:`steropes.touch`) and a
+downward camera mounted beside the finger, so toolcam frames render
 from the toolhead's real pose. At cruise height the finger tip clears the
 flat terminal body; the terminal's raised back strip (printer hump, see
 :mod:`steropes.scene`) is the collision hazard the guard exists to catch.
@@ -17,6 +18,7 @@ import math
 from dataclasses import dataclass
 
 from . import deck as deck_const
+from . import touch
 
 # --- toolhead geometry (mm; body origin at the carriage centre) ---------------
 CARRIAGE_HALF_MM = (20.0, 20.0, 10.0)
@@ -92,7 +94,13 @@ def interpolate(start: tuple[float, float], goal: tuple[float, float],
 # --- MJCF ----------------------------------------------------------------------------
 
 def toolhead_xml() -> str:
-    """MJCF fragment: toolhead body with X/Y slide joints, finger, toolcam."""
+    """MJCF fragment: toolhead body with X/Y slide joints, finger, toolcam.
+
+    The finger is a separate plunger body on a Z slide joint (``tool_z``,
+    positive = down) with spring-damper compliance — a pogo-pin stand-in.
+    Its joint spring reference is what a tap actuates; see
+    :meth:`steropes.scene.DeckScene.tap_finger`.
+    """
     chx, chy, chz = CARRIAGE_HALF_MM
     fx, fy, fz = FINGER_OFFSET_MM
     cx, cy, cz = TOOLCAM_OFFSET_MM
@@ -105,12 +113,16 @@ def toolhead_xml() -> str:
       <geom name="tool_carriage" type="box"
             size="{chx / 1000:.4f} {chy / 1000:.4f} {chz / 1000:.4f}"
             rgba="0.75 0.45 0.15 1"/>
-      <geom name="tool_finger" type="cylinder"
-            size="{FINGER_RADIUS_MM / 1000:.4f} {FINGER_HALF_LEN_MM / 1000:.4f}"
-            pos="{fx / 1000:.4f} {fy / 1000:.4f} {fz / 1000:.4f}"
-            rgba="0.85 0.85 0.88 1"/>
       <camera name="toolcam"
               pos="{cx / 1000:.4f} {cy / 1000:.4f} {cz / 1000:.4f}"
               xyaxes="1 0 0 0 1 0" fovy="{TOOL_CAMERA.fovy_deg:.4f}"/>
+      <body name="tool_finger_body" pos="{fx / 1000:.4f} {fy / 1000:.4f} {fz / 1000:.4f}">
+        <joint name="tool_z" type="slide" axis="0 0 -1" range="0 0.03"
+               springref="0" stiffness="{touch.FINGER_SPRING_N_PER_M}"
+               damping="{touch.FINGER_DAMPING_NS_PER_M}"/>
+        <geom name="tool_finger" type="cylinder"
+              size="{FINGER_RADIUS_MM / 1000:.4f} {FINGER_HALF_LEN_MM / 1000:.4f}"
+              density="{touch.FINGER_DENSITY_KG_M3}" rgba="0.85 0.85 0.88 1"/>
+      </body>
     </body>
 """

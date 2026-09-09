@@ -6,8 +6,9 @@ digits 0-9 shuffled plus two blank keys, and a tiny screen state machine
 (idle -> keypad -> approved/declined) renders a framebuffer the way a real
 POS screen would look to a camera — light glyphs on a dark background.
 
-At M1 fidelity a "tap" is a direct model call (:meth:`DeviceUnderTest.tap`);
-physical contact through the physics engine is a later milestone.
+Taps reach the model two ways: as direct model calls
+(:meth:`DeviceUnderTest.tap`) for the fast M1 tier, or as physical finger
+contacts routed through :meth:`steropes.scene.DeckScene.tap_finger` (M3).
 """
 from __future__ import annotations
 

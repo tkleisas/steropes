@@ -79,8 +79,16 @@ Each milestone stands alone — if the project stalls, what's built is still use
   — the toolhead tracks waypoints (including over the terminal) with toolcam
   frames from each pose and no contact, then a deliberate intercept path trips
   the contact guard.
-- **M3 — Contacts.** Key actuation with spring-damper keys, card grip/insert/eject
-  with friction and compliance.
+- **M3 — Contacts. DONE.** The finger physically taps the DUT screen: a
+  pogo-pin style compliant plunger (Z slide joint, spring-damper) descends
+  onto the rendered keypad, and the contact point and peak force come from
+  the physics engine, not from the commanded coordinates — off-target taps
+  register as wrong cells or misses, and every tap is checked against a
+  1.5–6 N force budget. Proof:
+  `python -m steropes.scenario scenarios/pin_purchase_physical.yaml` — the
+  M1 flagship done for real: READY → keypad OCR → planned PIN tapped
+  physically (~3.3 N peak) → re-rendered screen reads APPROVED. (Card
+  grip/insert/eject is out of scope for this DUT.)
 - **M4 — Closed loop.** Moonraker-emulating server in front of the physics backend;
   an unmodified Klipper-style host stack runs scenarios against it; CI tier +
   drift guards against the reference machine's CAD and firmware configuration.
@@ -95,10 +103,12 @@ scope by design.
 
 ## Status
 
-Pre-alpha. M1 (static scene + cameras + vision loop) and M2 (kinematic
-gantry + collision guard) are complete and covered by scenario tests; the
-package is importable and `pytest` is green. Everything past M2 is design
-scaffold — see the roadmap above.
+Pre-alpha. M1 (static scene + cameras + vision loop), M2 (kinematic
+gantry + collision guard), and M3 (physical screen taps with compliant
+finger, contact-derived registration, and per-tap force budget) are
+complete and covered by scenario tests; the package is importable and
+`pytest` is green. Everything past M3 is design scaffold — see the
+roadmap above.
 
 ## License
 

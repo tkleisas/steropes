@@ -12,12 +12,14 @@ body:
 
 screen:
   # 96x72 mm (4:3, matching the canonical canvas aspect so glyphs rectify
-  # without anisotropic stretch)
+  # without anisotropic stretch). Kept >= 16 mm clear of the printer hump
+  # (riser front face at y=160) so the 40 mm-deep toolhead carriage can
+  # reach the top keypad row without interference.
   polygon_mm:
-    - [152.0, 156.0]             # top-left
-    - [248.0, 156.0]             # top-right
-    - [248.0, 84.0]              # bottom-right
-    - [152.0, 84.0]              # bottom-left
+    - [152.0, 144.0]             # top-left
+    - [248.0, 144.0]             # top-right
+    - [248.0, 72.0]              # bottom-right
+    - [152.0, 72.0]              # bottom-left
   canonical_px: [320, 240]       # rectified screen canvas (w x h)
 
 keypad:

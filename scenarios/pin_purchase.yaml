@@ -1,6 +1,6 @@
 # Full PIN-purchase loop at M1 fidelity: idle -> keypad -> OCR -> tap plan
-# -> enter PIN -> result screen. Taps are fed to the DUT model directly
-# (physics contact is M3).
+# -> enter PIN -> result screen. Taps are fed to the DUT model directly;
+# pin_purchase_physical.yaml runs the same loop with physical finger taps.
 name: pin_purchase
 profile: ../profiles/countertop_pos_v1.yaml
 seed: 42
